@@ -12,7 +12,7 @@ bash scripts/smoke-test-app.sh
 ```
 
 The build script creates a universal arm64/x86_64 application at
-`build/FlowGesture.app` and a ZIP archive at `build/FlowGesture-macos.zip`.
+`build/FlowGesture.app` and a disk image at `build/FlowGesture-macos.dmg`.
 It validates the plist and applies/verifies an ad-hoc signature. It does not
 notarize the app or configure a Developer ID identity.
 
@@ -54,6 +54,8 @@ from input rules so settings remain usable.
 
 ## CI storage
 
-Only successful app ZIP artifacts are uploaded, retained for seven days.
+Only the app DMG is uploaded, retained for seven days.
+The uploaded image is downloaded again, byte-compared, verified, mounted read-only,
+then its copied app is signature/architecture-checked and launched.
 Concurrency cancels superseded runs on the same ref. Historical run/artifact
 deletion is not automatic; useful diagnostic logs and the current build are retained.

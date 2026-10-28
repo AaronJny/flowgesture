@@ -27,5 +27,10 @@ PLIST
 plutil -lint "$APP/Contents/Info.plist"
 codesign --force --sign - "$APP"
 codesign --verify --strict "$APP"
-ditto -c -k --sequesterRsrc --keepParent "$APP" "$PWD/build/FlowGesture-macos.zip"
+STAGING="$(mktemp -d -t flowgesture-dmg)"
+trap 'rm -rf "$STAGING"' EXIT
+ditto "$APP" "$STAGING/FlowGesture.app"
+ln -s /Applications "$STAGING/Applications"
+hdiutil create -volname "FlowGesture" -srcfolder "$STAGING" -ov -format UDZO "$PWD/build/FlowGesture-macos.dmg"
+hdiutil verify "$PWD/build/FlowGesture-macos.dmg"
 printf '\nBuilt %s\n' "$APP"

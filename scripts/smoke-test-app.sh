@@ -9,7 +9,7 @@ cleanup() {
 }
 trap cleanup EXIT
 # No permission grants and no configured input actions: this verifies startup only.
-build/FlowGesture.app/Contents/MacOS/FlowGesture >"$LOG" 2>&1 &
+"${1:-build/FlowGesture.app}/Contents/MacOS/FlowGesture" >"$LOG" 2>&1 &
 PID=$!
 sleep 3
 if ! kill -0 "$PID" 2>/dev/null; then cat "$LOG"; echo 'App exited during launch smoke test'; exit 1; fi

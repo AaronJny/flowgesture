@@ -18,13 +18,13 @@
 
 ## 下载
 
-**[下载行云手势 macOS 版](https://github.com/AaronJny/flowgesture/actions/runs/40647670809/artifacts/12798282835)** · macOS 13+ · 支持 Apple Silicon 与 Intel
+**[下载行云手势 macOS 版](https://github.com/AaronJny/flowgesture/actions)** · macOS 13+ · 支持 Apple Silicon 与 Intel
 
 [所有下载](https://github.com/AaronJny/flowgesture/actions)
 
 ## 开始使用
 
-1. 下载并解压，将 `FlowGesture.app` 移到“应用程序”。
+1. 下载并打开 `FlowGesture-macos.dmg`，将行云手势拖到“Applications（应用程序）”。
 2. 打开应用，从菜单栏进入“行云手势设置”。
 3. 在“系统设置 → 隐私与安全性”中授予“辅助功能”和“输入监控”权限，然后刷新权限状态。
 4. 点击“添加示例”体验配置，或点击“添加规则”创建自己的操作；准备好后启用行云手势。

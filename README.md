@@ -18,13 +18,13 @@ FlowGesture is a native macOS app for custom gestures, smoother scrolling and ev
 
 ## Download
 
-**[Download FlowGesture for macOS](https://github.com/AaronJny/flowgesture/actions/runs/40647670809/artifacts/12798282835)** · macOS 13+ · Apple Silicon and Intel
+**[Download FlowGesture for macOS](https://github.com/AaronJny/flowgesture/actions)** · macOS 13+ · Apple Silicon and Intel
 
 [All downloads](https://github.com/AaronJny/flowgesture/actions)
 
 ## Get started
 
-1. Download and extract the archive, then move `FlowGesture.app` to Applications.
+1. Download `FlowGesture-macos.dmg`, open it, then drag FlowGesture onto Applications.
 2. Open the app and choose **FlowGesture Settings** from the menu bar.
 3. Grant **Accessibility** and **Input Monitoring** in System Settings → Privacy & Security, then refresh the permission status.
 4. Choose **Add examples** to try a setup, or **Add rule** to create your own. Enable FlowGesture when you are ready.
