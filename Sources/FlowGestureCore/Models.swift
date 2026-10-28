@@ -140,7 +140,7 @@ public struct AppScope: Codable, Hashable, Sendable {
 }
 
 public enum WindowAction: String, Codable, Hashable, CaseIterable, Sendable {
-    case maximize, center, leftHalf, rightHalf, topHalf, bottomHalf, minimize, close
+    case maximize, toggleFullScreen, center, leftHalf, rightHalf, topHalf, bottomHalf, minimize, close
 }
 
 public enum SystemAction: String, Codable, Hashable, CaseIterable, Sendable {

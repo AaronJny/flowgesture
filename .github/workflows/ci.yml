@@ -26,16 +26,26 @@ jobs:
         run: bash scripts/build-app.sh
       - name: Launch smoke test
         run: bash scripts/smoke-test-app.sh
+      - name: Test mappings while FlowGesture is foreground
+        run: build/FlowGesture.app/Contents/MacOS/FlowGesture --foreground-rule-smoke
+      - name: Test diagonal gesture toggles real full screen
+        run: build/FlowGesture.app/Contents/MacOS/FlowGesture --fullscreen-rule-smoke
       - name: Test native shortcut capture pipeline
         run: build/FlowGesture.app/Contents/MacOS/FlowGesture --shortcut-capture-smoke
       - name: Test actual shortcut record and save UI
         run: build/FlowGesture.app/Contents/MacOS/FlowGesture --shortcut-ui-smoke
+      - name: Test mouse capture and save in all trigger editors
+        run: |
+          for mode in click draw shape; do
+            build/FlowGesture.app/Contents/MacOS/FlowGesture --mouse-capture-ui-smoke "$mode"
+          done
       - name: Render rule editor for visual review
         run: |
           mkdir -p build/ui-review
           build/FlowGesture.app/Contents/MacOS/FlowGesture --ui-review-screenshot "$PWD/build/ui-review/rule-editor.png"
           build/FlowGesture.app/Contents/MacOS/FlowGesture --ui-review-screenshot "$PWD/build/ui-review/scrolling.png" --ui-review-scrolling
           build/FlowGesture.app/Contents/MacOS/FlowGesture --ui-review-screenshot "$PWD/build/ui-review/manual-shortcut.png" --ui-review-manual-shortcut
+          build/FlowGesture.app/Contents/MacOS/FlowGesture --ui-review-screenshot "$PWD/build/ui-review/draw-capture.png" --ui-review-draw
       - name: Verify install image
         run: bash scripts/verify-dmg.sh build/FlowGesture-macos.dmg
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

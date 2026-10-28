@@ -82,7 +82,7 @@ enum L10n {
         "Window": "窗口", "System": "系统", "URL": "网址", "Application path or bundle ID": "应用路径或包标识符",
         "Menu path, separated by >": "菜单路径，以 > 分隔", "Action": "动作",
         "Scripts execute with your user permissions. Review imported scripts before enabling rules.": "脚本以你的用户权限执行。启用导入的规则前，请先审核脚本。",
-        "Maximize": "最大化", "Center": "居中", "Left half": "左半屏", "Right half": "右半屏", "Top half": "上半屏", "Bottom half": "下半屏", "Minimize": "最小化",
+        "Maximize": "最大化（非全屏）", "Maximize (not full screen)": "最大化（非全屏）", "Toggle full screen": "切换全屏（进入/退出）", "Center": "居中", "Left half": "左半屏", "Right half": "右半屏", "Top half": "上半屏", "Bottom half": "下半屏", "Minimize": "最小化",
         "Mission Control": "调度中心", "Show desktop": "显示桌面", "Application windows": "应用窗口", "Launchpad": "启动台",
         "Volume up": "增大音量", "Volume down": "减小音量", "Mute": "静音", "Brightness up": "提高亮度", "Brightness down": "降低亮度",
         "Play / pause": "播放 / 暂停", "Next track": "下一首", "Previous track": "上一首", "Lock screen": "锁定屏幕",
@@ -168,7 +168,8 @@ enum L10n {
     }
     static func window(_ value: WindowAction) -> String {
         switch value {
-        case .maximize: return "Maximize"
+        case .maximize: return "Maximize (not full screen)"
+        case .toggleFullScreen: return "Toggle full screen"
         case .center: return "Center"
         case .leftHalf: return "Left half"
         case .rightHalf: return "Right half"

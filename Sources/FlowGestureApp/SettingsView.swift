@@ -35,6 +35,13 @@ struct SettingsView: View {
             }.navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 260)
         } detail: {
             VStack(spacing: 0) {
+                if let actionError = model.actionError {
+                    HStack(alignment: .top) {
+                        Label(actionError, systemImage: "exclamationmark.triangle").font(.callout).textSelection(.enabled)
+                        Spacer()
+                        Button { model.actionError = nil } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain)
+                    }.padding(12).frame(maxWidth: .infinity, alignment: .leading).background(.orange.opacity(0.12))
+                }
                 if model.isEnabled && !model.engineRunning && (!model.accessibilityGranted || !model.inputMonitoringGranted) {
                     VStack(alignment: .leading, spacing: 8) {
                         Label(model.t("Permission needed — features are not running yet"), systemImage: "exclamationmark.triangle.fill").font(.headline)

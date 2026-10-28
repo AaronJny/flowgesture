@@ -8,8 +8,13 @@ final class ActionExecutor {
     private let gate = ActionExecutionGate()
     func cancelPending() { gate.cancelPending() }
     func execute(_ actions: [Action]) {
+        execute(actions, targetApplication: NSWorkspace.shared.frontmostApplication)
+    }
+    /// An explicitly captured nil stays nil; never retarget a queued window/menu
+    /// action to whichever app happens to become foreground a moment later.
+    func execute(_ actions: [Action], targetApplication: NSRunningApplication?) {
         let token = gate.snapshot()
-        let app = NSWorkspace.shared.frontmostApplication
+        let app = targetApplication
         // Ordered serial execution preserves action-list semantics, including scripts.
         scriptQueue.async { [weak self] in
             guard let self else { return }
@@ -100,22 +105,55 @@ final class ActionExecutor {
         if AXUIElementPerformAction(element, kAXPressAction as CFString) != .success { fail("Menu action failed / 菜单动作失败") }
     }
     private func window(_ operation: WindowAction, custom: CGRect?, app: NSRunningApplication?) {
-        guard let app else { return }
+        guard let app else { fail(WindowActionFailure.noTargetApplication.localizedDescription); return }
+        guard !app.isTerminated else { fail(WindowActionFailure.targetApplicationTerminated.localizedDescription); return }
+        if operation == .toggleFullScreen, app.processIdentifier == ProcessInfo.processInfo.processIdentifier {
+            guard let ownWindow = NSApp.keyWindow ?? NSApp.mainWindow else { fail(WindowActionFailure.noFocusedWindow.localizedDescription); return }
+            guard ownWindow.styleMask.contains(.resizable) || ownWindow.styleMask.contains(.fullScreen) else {
+                fail(WindowActionFailure.fullScreenUnsupported.localizedDescription); return
+            }
+            // Native AppKit transitions enter/leave a real full-screen Space.
+            // Completion is asynchronous; callers must observe window notifications.
+            ownWindow.toggleFullScreen(nil)
+            return
+        }
+        guard AXIsProcessTrusted() else { fail(WindowActionFailure.accessibilityPermissionRequired.localizedDescription); return }
         let application = AXUIElementCreateApplication(app.processIdentifier)
-        guard let value = attribute(application, kAXFocusedWindowAttribute as CFString) else { fail("No focused window / 没有当前窗口"); return }
+        guard let value = attribute(application, kAXFocusedWindowAttribute as CFString), CFGetTypeID(value) == AXUIElementGetTypeID() else {
+            fail(WindowActionFailure.noFocusedWindow.localizedDescription); return
+        }
         let win = value as! AXUIElement
-        if operation == .minimize { _ = AXUIElementSetAttributeValue(win, kAXMinimizedAttribute as CFString, kCFBooleanTrue); return }
+        if operation == .toggleFullScreen { toggleFullScreen(win); return }
+        if operation == .minimize {
+            let result = AXUIElementSetAttributeValue(win, kAXMinimizedAttribute as CFString, kCFBooleanTrue)
+            if result != .success { fail(WindowActionFailure.accessibility(operation: "minimize", code: result.rawValue).localizedDescription) }
+            return
+        }
         if operation == .close {
             guard let button = attribute(win, kAXCloseButtonAttribute as CFString) else { fail("Window has no close button / 窗口无关闭按钮"); return }
-            _ = AXUIElementPerformAction(button as! AXUIElement, kAXPressAction as CFString); return
+            let result = AXUIElementPerformAction(button as! AXUIElement, kAXPressAction as CFString)
+            if result != .success { fail(WindowActionFailure.accessibility(operation: "close", code: result.rawValue).localizedDescription) }
+            return
         }
-        var position = CGPoint.zero, size = CGSize(width: 800, height: 600)
-        if let p = attribute(win, kAXPositionAttribute as CFString) { _ = AXValueGetValue(p as! AXValue, .cgPoint, &position) }
-        if let s = attribute(win, kAXSizeAttribute as CFString) { _ = AXValueGetValue(s as! AXValue, .cgSize, &size) }
+        let requiresResize = operation != .center || custom != nil
+        var canMove = DarwinBoolean(false), canResize = DarwinBoolean(false)
+        let moveQuery = AXUIElementIsAttributeSettable(win, kAXPositionAttribute as CFString, &canMove)
+        let sizeQuery = AXUIElementIsAttributeSettable(win, kAXSizeAttribute as CFString, &canResize)
+        do {
+            try WindowActionSupport.validateLayout(isFullScreen: fullScreenState(win) == true,
+                positionSettable: moveQuery == .success && canMove.boolValue,
+                sizeSettable: sizeQuery == .success && canResize.boolValue, requiresResize: requiresResize)
+        } catch { fail(error.localizedDescription); return }
+        var position = CGPoint.zero, size = CGSize.zero
+        guard let rawPosition = attribute(win, kAXPositionAttribute as CFString), CFGetTypeID(rawPosition) == AXValueGetTypeID(),
+              let rawSize = attribute(win, kAXSizeAttribute as CFString), CFGetTypeID(rawSize) == AXValueGetTypeID(),
+              AXValueGetValue(rawPosition as! AXValue, .cgPoint, &position), AXValueGetValue(rawSize as! AXValue, .cgSize, &size),
+              position.x.isFinite, position.y.isFinite, size.width.isFinite, size.height.isFinite,
+              size.width > 0, size.height > 0 else { fail(WindowActionFailure.unreadableGeometry.localizedDescription); return }
         let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
         let cocoaCenter = CGPoint(x: position.x + size.width/2, y: primaryHeight-position.y-size.height/2)
         let screen = NSScreen.screens.first { $0.frame.contains(cocoaCenter) } ?? NSScreen.main ?? NSScreen.screens.first
-        guard let screen else { return }
+        guard let screen else { fail("No display is available for the window. / 没有可用于该窗口的显示器。"); return }
         let visible = screen.visibleFrame
         let frame = CGRect(x: visible.minX, y: primaryHeight-visible.maxY, width: visible.width, height: visible.height)
         var target = frame
@@ -138,9 +176,26 @@ final class ActionExecutor {
         }
         var newPosition = target.origin, newSize = target.size
         guard let p = AXValueCreate(.cgPoint, &newPosition), let s = AXValueCreate(.cgSize, &newSize) else { return }
-        let first = AXUIElementSetAttributeValue(win, kAXSizeAttribute as CFString, s)
+        let first: AXError = requiresResize ? AXUIElementSetAttributeValue(win, kAXSizeAttribute as CFString, s) : .success
         let second = AXUIElementSetAttributeValue(win, kAXPositionAttribute as CFString, p)
-        if first != .success || second != .success { fail("Application refused window change / 应用拒绝窗口调整") }
+        if first != .success || second != .success {
+            fail("Window change was not fully applied (resize AX \(first.rawValue), move AX \(second.rawValue)). / 窗口调整未完全应用（大小错误\(first.rawValue)，位置错误\(second.rawValue)）。")
+        }
+    }
+    private func fullScreenState(_ window: AXUIElement) -> Bool? {
+        guard let value = attribute(window, "AXFullScreen" as CFString), CFGetTypeID(value) == CFBooleanGetTypeID() else { return nil }
+        return (value as? NSNumber)?.boolValue
+    }
+    private func toggleFullScreen(_ window: AXUIElement) {
+        let key = "AXFullScreen" as CFString
+        var settable = DarwinBoolean(false)
+        let query = AXUIElementIsAttributeSettable(window, key, &settable)
+        do {
+            let target = try WindowActionSupport.fullScreenTarget(current: fullScreenState(window),
+                                                                  isSettable: query == .success && settable.boolValue)
+            let result = AXUIElementSetAttributeValue(window, key, target ? kCFBooleanTrue : kCFBooleanFalse)
+            if result != .success { fail(WindowActionFailure.accessibility(operation: "toggle full screen", code: result.rawValue).localizedDescription) }
+        } catch { fail(error.localizedDescription) }
     }
     private func systemAction(_ action: SystemAction) {
         switch action {

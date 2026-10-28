@@ -45,6 +45,7 @@ final class AppModel: ObservableObject {
         didSet { UserDefaults.standard.set(language.rawValue, forKey: "FlowGesture.language") }
     }
     @Published var errorMessage: String?
+    @Published var actionError: String?
     @Published var notice: String?
     @Published private(set) var configurationLoadError: String?
     @Published private(set) var syncFolder: URL?

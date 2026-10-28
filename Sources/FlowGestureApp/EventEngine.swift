@@ -115,6 +115,7 @@ final class EventEngine {
         onStatus?("Running / 运行中")
     }
     func stop() {
+        ownAppPolicy.reset()
         diagnostics.stop()
         configurationGeneration &+= 1; executor.cancelPending()
         flushPending(); completeClicks(count: nil, replay: true)
@@ -137,7 +138,7 @@ final class EventEngine {
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
         _ = AXIsProcessTrustedWithOptions(options)
     }
-    static func shouldBypassOwnAppEvent(_ type: CGEventType) -> Bool { type != .scrollWheel }
+    private var ownAppPolicy = OwnAppInputPolicy()
     private var swallowedKeys: Set<UInt16> = []
     private func handle(_ type: CGEventType, _ event: CGEvent) -> Unmanaged<CGEvent>? {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
@@ -147,8 +148,7 @@ final class EventEngine {
         if type == .keyUp, swallowedKeys.remove(UInt16(event.getIntegerValueField(.keyboardEventKeycode))) != nil { return nil }
         let foreground = NSWorkspace.shared.frontmostApplication
         let app = foreground?.bundleIdentifier
-        if foreground?.processIdentifier == ProcessInfo.processInfo.processIdentifier && Self.shouldBypassOwnAppEvent(type) {
-            smoother.reset(); cancelPending(); completeClicks(count: nil, replay: false)
+        if ownAppPolicy.shouldBypass(eventType: type, context: OwnAppInputPolicy.context(atQuartzPoint: event.location)) {
             return Unmanaged.passUnretained(event)
         }
         if let discardedButton, Int(event.getIntegerValueField(.mouseEventButtonNumber)) == discardedButton.rawValue,
@@ -262,8 +262,8 @@ final class EventEngine {
     }
     @discardableResult private func fire(_ trigger: InputTrigger) -> Bool { fire([trigger]) }
     @discardableResult private func fire(_ triggers: [InputTrigger]) -> Bool {
-        guard NSWorkspace.shared.frontmostApplication?.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return false }
-        let app = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        let targetApplication = NSWorkspace.shared.frontmostApplication
+        let app = targetApplication?.bundleIdentifier
         let ids = Set(triggers.flatMap { RuleMatcher.matchingRules(for: $0, in: app, rules: book.rules, excludedBundleIdentifiers: book.excludedBundleIdentifiers).map(\.id) })
         let matches = book.rules.enumerated().filter { ids.contains($0.element.id) }.sorted { left, right in
             if left.element.scope.isGlobal != right.element.scope.isGlobal { return !left.element.scope.isGlobal }
@@ -274,7 +274,7 @@ final class EventEngine {
         let generation = configurationGeneration
         DispatchQueue.main.async { [weak self] in
             guard let self, self.isRunning, self.configurationGeneration == generation else { return }
-            self.onEvent?(rule.name); self.executor.execute(rule.actions)
+            self.onEvent?(rule.name); self.executor.execute(rule.actions, targetApplication: targetApplication)
         }
         return true
     }

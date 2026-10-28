@@ -17,7 +17,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>CFBundleIdentifier</key><string>com.aaronjny.flowgesture</string>
 <key>CFBundleName</key><string>FlowGesture</string>
 <key>CFBundleDisplayName</key><string>FlowGesture</string>
-<key>CFBundleShortVersionString</key><string>0.1.2</string>
+<key>CFBundleShortVersionString</key><string>0.1.3</string>
 <key>CFBundleVersion</key><string>1</string>
 <key>CFBundleIconFile</key><string>AppIcon.icns</string>
 <key>CFBundlePackageType</key><string>APPL</string>

@@ -42,9 +42,12 @@ struct RuleEditor: View {
                     }.font(.title2.weight(.semibold)).padding(.horizontal, 4)
                     HStack(alignment: .top, spacing: 18) {
                         mappingCard(number: "1", title: model.mappingText("Which button?", "按哪个键？")) {
-                            Picker(model.mappingText("Input", "输入方式"), selection: Binding(get: { TriggerKind(rule.trigger) }, set: { rule.trigger = $0.initial })) {
+                            Picker(model.mappingText("Input", "输入方式"), selection: Binding(get: { TriggerKind(rule.trigger) }, set: {
+                                if let recorder = model.activeShortcutRecorder { model.endShortcutRecording(id: recorder) }
+                                rule.trigger = $0.initial
+                            })) {
                                 ForEach(TriggerKind.allCases) { Text(model.t($0.rawValue)).tag($0) }
-                            }
+                            }.accessibilityIdentifier("flowgesture.rule.trigger.kind")
                             Divider().padding(.vertical, 4)
                             triggerEditor
                         }
@@ -82,6 +85,7 @@ struct RuleEditor: View {
                     }
                     if onSave(rule) { dismiss() }
                 }.keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent).disabled(!issues.isEmpty || model.activeShortcutRecorder != nil)
+                    .accessibilityIdentifier("flowgesture.rule.save")
             }.padding(.horizontal, 24).padding(.vertical, 16)
         }.frame(minWidth: 900, idealWidth: 980, minHeight: 690, idealHeight: 740)
     }
@@ -211,19 +215,30 @@ private struct ModifiersEditor: View {
 }
 
 private struct MouseTriggerEditor: View {
-    @EnvironmentObject private var model: AppModel
     @Binding var value: MouseButtonTrigger
+    var body: some View { MouseButtonPicker(button: $value.button) }
+}
+
+/// One button selector for click, directional drawing, and free-form shapes.
+/// This binding changes only the button, never the surrounding trigger payload.
+private struct MouseButtonPicker: View {
+    @EnvironmentObject private var model: AppModel
+    @Binding var button: MouseButton
+    var compact = false
     @State private var recording = false
     @State private var recorderID = UUID()
     @State private var feedback: String?
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 16) {
-                MouseButtonVisual(button: value.button)
-                VStack(alignment: .leading, spacing: 7) {
-                    Text(MappingLabels.mouse(value.button, model: model)).font(.title3.bold())
-                    Text(model.mappingText("Mouse button \(value.button.rawValue + 1)", "鼠标按钮 \(value.button.rawValue + 1)")).font(.caption).foregroundStyle(.secondary)
-                    Text(value.button == .middle ? model.mappingText("Press the wheel — not scrolling.", "按下滚轮，不是滚动滚轮。") : model.mappingText("Side-button positions vary. Record the actual button below.", "侧键位置因设备而异，请录制你实际按下的键。")).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                if !compact { MouseButtonVisual(button: button) }
+                VStack(alignment: .leading, spacing: compact ? 4 : 7) {
+                    Text(MappingLabels.mouse(button, model: model)).font(compact ? .headline : .title3.bold())
+                        .accessibilityIdentifier("flowgesture.mouse.button.selection")
+                    if button.rawValue <= 2 {
+                        Text(model.mappingText("Mouse button \(button.rawValue + 1)", "鼠标按钮 \(button.rawValue + 1)")).font(.caption).foregroundStyle(.secondary)
+                    }
+                    Text(button == .middle ? model.mappingText("Press the wheel — not scrolling.", "按下滚轮，不是滚动滚轮。") : model.mappingText("Side-button positions vary. Record the actual button below.", "侧键位置因设备而异，请录制你实际按下的键。")).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
             if recording {
@@ -231,12 +246,14 @@ private struct MouseTriggerEditor: View {
                     RoundedRectangle(cornerRadius: 9).fill(Color.accentColor.opacity(0.08))
                     Text(model.mappingText("Press your mouse button HERE", "在此区域按下要映射的鼠标键")).font(.callout.weight(.medium)).foregroundStyle(Color.accentColor).multilineTextAlignment(.center).padding(12)
                     MouseButtonCaptureSurface { number, _ in
-                        if let button = MouseButton(rawValue: number) {
-                            value.button = button
+                        // A late release from a replaced recorder must not edit the new mode.
+                        guard recording, model.activeShortcutRecorder == recorderID else { stopRecording(); return }
+                        if let captured = MouseButton(rawValue: number) {
+                            button = captured
                             feedback = model.mappingText("Recorded actual button \(number + 1)", "已录制实际按钮 \(number + 1)")
                         } else { feedback = model.mappingText("Button \(number + 1) is not supported yet (1–8 supported).", "暂不支持按钮 \(number + 1)（目前支持 1–8）。") }
                         stopRecording()
-                    }
+                    }.accessibilityIdentifier("flowgesture.mouse.capture.surface")
                 }.frame(height: 64).overlay(RoundedRectangle(cornerRadius: 9).stroke(Color.accentColor, style: StrokeStyle(lineWidth: 1, dash: [4])))
             }
             HStack {
@@ -244,13 +261,14 @@ private struct MouseTriggerEditor: View {
                     if recording { stopRecording() }
                     else { recording = true; feedback = nil; model.beginShortcutRecording(id: recorderID) }
                 }.buttonStyle(.borderedProminent)
+                    .accessibilityIdentifier("flowgesture.mouse.capture.start")
                 Menu(model.mappingText("Choose manually", "手动选择")) {
-                    ForEach(MouseButton.allCases, id: \.self) { button in
-                        Button(MappingLabels.mouse(button, model: model)) { value.button = button; stopRecording() }
+                    ForEach(MouseButton.allCases, id: \.self) { candidate in
+                        Button(MappingLabels.mouse(candidate, model: model)) { button = candidate; stopRecording() }
                     }
-                }.fixedSize()
+                }.fixedSize().accessibilityIdentifier("flowgesture.mouse.capture.manual")
             }
-            if let feedback { Text(feedback).font(.caption).foregroundStyle(.secondary) }
+            if let feedback { Text(feedback).font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("flowgesture.mouse.capture.feedback") }
         }
         .onDisappear { stopRecording() }
         .onChange(of: model.activeShortcutRecorder) { if $0 != recorderID && recording { stopRecording() } }
@@ -266,9 +284,7 @@ private struct DrawTriggerEditor: View {
     @EnvironmentObject private var model: AppModel
     @Binding var value: DrawGestureTrigger
     var body: some View {
-        Picker(model.t("Button"), selection: $value.button) {
-            ForEach(MouseButton.allCases, id: \.self) { Text(model.t(L10n.mouse($0))).tag($0) }
-        }
+        MouseButtonPicker(button: $value.button, compact: true)
         VStack(alignment: .leading, spacing: 10) {
             Text(model.t("Direction sequence"))
             Text(value.directions.map(L10n.arrow).joined(separator: "  "))
@@ -298,9 +314,7 @@ private struct ShapeTriggerEditor: View {
     @State private var feedback: String?
 
     var body: some View {
-        Picker(model.t("Button"), selection: $value.button) {
-            ForEach(MouseButton.allCases, id: \.self) { Text(model.t(L10n.mouse($0))).tag($0) }
-        }
+        MouseButtonPicker(button: $value.button, compact: true)
         VStack(alignment: .leading, spacing: 10) {
             GeometryReader { geometry in
                 ZStack {
@@ -646,6 +660,7 @@ private struct QuickActionEditor: View {
                 switch shortcut.keyCode { case 8: return "copy"; case 9: return "paste"; case 33: return "back"; case 30: return "forward"; default: break }
             }
             return "shortcut"
+        case .window(.toggleFullScreen): return "fullScreen"
         case .window: return "window"
         case .openApplication: return "app"
         default: return "more"
@@ -660,6 +675,7 @@ private struct QuickActionEditor: View {
             Text(model.mappingText("Previous desktop (default ⌃←)", "上一桌面（默认 ⌃←）")).tag("previousDesktop")
             Text(model.mappingText("Next desktop (default ⌃→)", "下一桌面（默认 ⌃→）")).tag("nextDesktop")
             Text(model.mappingText("Keyboard shortcut", "自定义快捷键")).tag("shortcut")
+            Text(model.mappingText("Toggle full screen", "切换全屏（进入/退出）")).tag("fullScreen")
             Text(model.mappingText("Move / resize window", "移动 / 调整窗口")).tag("window")
             Text(model.mappingText("Open an app", "打开应用")).tag("app")
             Text(model.mappingText("More actions…", "更多动作…")).tag("more")
@@ -671,6 +687,10 @@ private struct QuickActionEditor: View {
             if preset == "previousDesktop" || preset == "nextDesktop" {
                 Text(model.mappingText("If you customized desktop shortcuts in macOS, record or build that exact combination instead.", "如果你修改过 macOS 的桌面快捷键，请录制或手动组合你实际使用的按键。")).font(.caption).foregroundStyle(.secondary)
             }
+        case .window(.toggleFullScreen):
+            Image(systemName: "arrow.up.left.and.arrow.down.right").font(.system(size: 46)).foregroundStyle(Color.accentColor).frame(maxWidth: .infinity).padding(.vertical, 10)
+            Text(model.mappingText("Toggle full screen", "切换全屏（进入/退出）")).font(.headline).frame(maxWidth: .infinity)
+            Text(model.mappingText("Enter native macOS full screen; trigger again to exit. Maximize only resizes the window on the current desktop.", "进入 macOS 原生全屏，再触发一次即可退出。最大化仅在当前桌面调整窗口大小。")).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         case .window:
             Image(systemName: "macwindow").font(.system(size: 46)).foregroundStyle(Color.accentColor).frame(maxWidth: .infinity).padding(.vertical, 10)
             Picker(model.t("Window"), selection: caseBinding($action, fallback: WindowAction.maximize, extract: { if case .window(let value) = $0 { return value }; return nil }, embed: Action.window)) {
@@ -695,6 +715,7 @@ private struct QuickActionEditor: View {
         case "forward": action = .shortcut(FlowGestureCore.KeyboardShortcut(keyCode: 30, modifiers: .command))
         case "previousDesktop": action = .shortcut(FlowGestureCore.KeyboardShortcut(keyCode: 123, modifiers: .control))
         case "nextDesktop": action = .shortcut(FlowGestureCore.KeyboardShortcut(keyCode: 124, modifiers: .control))
+        case "fullScreen": action = .window(.toggleFullScreen)
         case "window": action = .window(.maximize)
         case "app": action = .openApplication("com.apple.finder")
         default: action = .system(.missionControl)

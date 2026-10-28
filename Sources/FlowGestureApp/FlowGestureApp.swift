@@ -64,7 +64,10 @@ private final class FlowGestureRuntime: ObservableObject {
         engine.onStatus = { [weak model] in model?.engineStatus = $0.components(separatedBy: " / ").first ?? $0 }
         engine.onScrollStatus = { [weak model] in model?.scrollStatus = $0 }
         engine.onEvent = { [weak model] in model?.lastEvent = $0 }
-        engine.onError = { [weak model] in model?.errorMessage = $0 }
+        engine.onError = { [weak model] message in
+            let parts = message.components(separatedBy: " / ")
+            model?.actionError = model?.mappingText(parts.first ?? message, parts.last ?? message)
+        }
         engine.onTouchStatus = { [weak model] in model?.touchBackendStatus = $0 }
         engine.onTouchDevices = { [weak model] in model?.touchDevices = $0 }
         engine.onDiagnosticStatus = { [weak model] in model?.gestureDiagnosticStatus = $0 }
@@ -117,10 +120,28 @@ private final class FlowGestureAppDelegate: NSObject, NSApplicationDelegate {
     private var settingsController: NSWindowController?
     private var shortcutSmoke: ShortcutCaptureSmoke?
     private var shortcutUISmoke: ShortcutCaptureUISmoke?
+    private var foregroundSmoke: ForegroundRuleSmoke?
+    private var fullScreenSmoke: FullScreenRuleSmoke?
+    private var mouseCaptureSmoke: MouseCaptureUISmoke?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         showSettings()
+        if ProcessInfo.processInfo.arguments.contains("--mouse-capture-ui-smoke") {
+            let smoke = MouseCaptureUISmoke(model: runtime.model, originalRule: mouseCaptureFixture())
+            mouseCaptureSmoke = smoke
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { smoke.start() }
+        }
+        if ProcessInfo.processInfo.arguments.contains("--fullscreen-rule-smoke") {
+            let smoke = FullScreenRuleSmoke(model: runtime.model)
+            fullScreenSmoke = smoke
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { smoke.start() }
+        }
+        if ProcessInfo.processInfo.arguments.contains("--foreground-rule-smoke") {
+            let smoke = ForegroundRuleSmoke(model: runtime.model)
+            foregroundSmoke = smoke
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { smoke.start() }
+        }
         if ProcessInfo.processInfo.arguments.contains("--shortcut-ui-smoke") {
             let smoke = ShortcutCaptureUISmoke(model: runtime.model)
             shortcutUISmoke = smoke
@@ -142,10 +163,36 @@ private final class FlowGestureAppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private var captureFixture: Rule?
+    private func mouseCaptureFixture() -> Rule {
+        if let captureFixture { return captureFixture }
+        let args = ProcessInfo.processInfo.arguments
+        let mode: String
+        if let i = args.firstIndex(of: "--mouse-capture-ui-smoke"), args.indices.contains(i + 1) { mode = args[i + 1] }
+        else { mode = "draw" }
+        let modifiers: ModifierKeys = [.control, .shift]
+        let trigger: InputTrigger
+        switch mode {
+        case "draw": trigger = .draw(DrawGestureTrigger(button: .middle, directions: [.upRight, .left], modifiers: modifiers))
+        case "shape": trigger = .shape(ShapeGestureTrigger(button: .middle, points: ShapeGestureRecognizer.normalizedPath([GesturePoint(x: 0, y: 0), GesturePoint(x: 100, y: 100), GesturePoint(x: 100, y: 0)]), modifiers: modifiers, tolerance: 0.2))
+        default: trigger = .mouseButton(MouseButtonTrigger(button: .middle, clickCount: 2, modifiers: modifiers))
+        }
+        let rule = Rule(name: "Capture \(mode) fixture", trigger: trigger, actions: [.shortcut(FlowGestureCore.KeyboardShortcut(keyCode: 8, modifiers: .command))])
+        captureFixture = rule
+        return rule
+    }
+
     func showSettings() {
         if settingsController == nil {
             let root: AnyView
-            if ProcessInfo.processInfo.arguments.contains("--ui-review-screenshot") || ProcessInfo.processInfo.arguments.contains("--shortcut-ui-smoke") {
+            if ProcessInfo.processInfo.arguments.contains("--mouse-capture-ui-smoke") || ProcessInfo.processInfo.arguments.contains("--ui-review-draw") {
+                runtime.model.language = .english
+                root = AnyView(RuleEditor(rule: mouseCaptureFixture(), onSave: { rule in
+                    guard self.runtime.model.saveRule(rule) else { return false }
+                    self.mouseCaptureSmoke?.saved(rule)
+                    return false
+                }).environmentObject(runtime.model))
+            } else if ProcessInfo.processInfo.arguments.contains("--ui-review-screenshot") || ProcessInfo.processInfo.arguments.contains("--shortcut-ui-smoke") {
                 runtime.model.language = ProcessInfo.processInfo.arguments.contains("--shortcut-ui-smoke") ? .english : .simplifiedChinese
                 let example = Rule(name: "复制", trigger: .mouseButton(MouseButtonTrigger(button: .back)), actions: [.shortcut(FlowGestureCore.KeyboardShortcut(keyCode: ProcessInfo.processInfo.arguments.contains("--ui-review-manual-shortcut") ? 123 : 8, modifiers: .command))])
                 if ProcessInfo.processInfo.arguments.contains("--ui-review-scrolling") {
