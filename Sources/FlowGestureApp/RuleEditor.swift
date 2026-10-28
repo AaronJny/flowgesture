@@ -86,6 +86,7 @@ struct RuleEditor: View {
                     if onSave(rule) { dismiss() }
                 }.keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent).disabled(!issues.isEmpty || model.activeShortcutRecorder != nil)
                     .accessibilityIdentifier("flowgesture.rule.save")
+                    .background { if ProcessInfo.processInfo.arguments.contains("--mouse-capture-ui-smoke") { SmokeControlGeometry(identifier: "flowgesture.rule.save") } }
             }.padding(.horizontal, 24).padding(.vertical, 16)
         }.frame(minWidth: 900, idealWidth: 980, minHeight: 690, idealHeight: 740)
     }
@@ -262,6 +263,7 @@ private struct MouseButtonPicker: View {
                     else { recording = true; feedback = nil; model.beginShortcutRecording(id: recorderID) }
                 }.buttonStyle(.borderedProminent)
                     .accessibilityIdentifier("flowgesture.mouse.capture.start")
+                    .background { if ProcessInfo.processInfo.arguments.contains("--mouse-capture-ui-smoke") { SmokeControlGeometry(identifier: "flowgesture.mouse.capture.start") } }
                 Menu(model.mappingText("Choose manually", "手动选择")) {
                     ForEach(MouseButton.allCases, id: \.self) { candidate in
                         Button(MappingLabels.mouse(candidate, model: model)) { button = candidate; stopRecording() }
@@ -801,5 +803,20 @@ private struct ActionEditor: View {
             guard case let .windowFrame(x, y, width, height) = action else { return }
             action = .windowFrame(x: key == "X" ? value : x, y: key == "Y" ? value : y, width: key == "Width" ? value : width, height: key == "Height" ? value : height)
         })
+    }
+}
+
+/// Invisible layout marker used only by opt-in UI regression runs. Does not
+/// intercept input or query AX on this process from a background thread.
+private struct SmokeControlGeometry: NSViewRepresentable {
+    let identifier: String
+    func makeNSView(context: Context) -> Marker {
+        let view = Marker()
+        view.identifier = NSUserInterfaceItemIdentifier(identifier)
+        return view
+    }
+    func updateNSView(_ view: Marker, context: Context) {}
+    final class Marker: NSView {
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
     }
 }

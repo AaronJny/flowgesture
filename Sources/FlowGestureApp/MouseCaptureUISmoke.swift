@@ -102,19 +102,21 @@ final class MouseCaptureUISmoke {
     }
 
     private func click(identifier: String, completion: @escaping @MainActor () -> Void) {
-        let pid = getpid()
-        // AX requests to this process must not block its main event loop.
-        DispatchQueue.global(qos: .userInitiated).async {
-            let result = Self.accessibilityCenter(identifier: identifier, pid: pid)
-            DispatchQueue.main.async {
-                guard !self.done else { return }
-                guard let point = result.point else { self.fail(result.error ?? "AX control could not be located"); return }
-                guard self.postMouse(type: .leftMouseDown, point: point, button: 0) else { return }
-                self.after(0.04) {
-                    guard self.postMouse(type: .leftMouseUp, point: point, button: 0) else { return }
-                    completion()
-                }
-            }
+        guard let window = NSApp.keyWindow, let root = window.contentView,
+              let mainScreen = NSScreen.screens.first else { fail("No visible UI window"); return }
+        var stack = [root]
+        var target: NSView?
+        while let view = stack.popLast() {
+            if view.identifier?.rawValue == identifier { target = view; break }
+            stack.append(contentsOf: view.subviews)
+        }
+        guard let target, target.bounds.width > 0, target.bounds.height > 0 else { fail("UI control geometry unavailable: \(identifier)"); return }
+        let nativePoint = window.convertPoint(toScreen: target.convert(NSPoint(x: target.bounds.midX, y: target.bounds.midY), to: nil))
+        let point = CGPoint(x: nativePoint.x, y: mainScreen.frame.maxY - nativePoint.y)
+        guard postMouse(type: .leftMouseDown, point: point, button: 0) else { return }
+        after(0.04) {
+            guard self.postMouse(type: .leftMouseUp, point: point, button: 0) else { return }
+            completion()
         }
     }
 
@@ -155,47 +157,4 @@ final class MouseCaptureUISmoke {
         exit(1)
     }
 
-    nonisolated private static func accessibilityCenter(identifier: String, pid: pid_t) -> MouseCaptureAXResult {
-        let app = AXUIElementCreateApplication(pid)
-        _ = AXUIElementSetMessagingTimeout(app, 1.0)
-        // Query only windows: traversing the application's AXChildren also walks
-        // its menu bar, whose self-process NSMenu bridge can assert off-main.
-        guard let windows = attribute(app, kAXWindowsAttribute as CFString) as? [AXUIElement], !windows.isEmpty else {
-            return MouseCaptureAXResult(point: nil, error: "Own-app AX windows are unavailable")
-        }
-        var stack = windows
-        var inspected = 0
-        while let element = stack.popLast(), inspected < 4_000 {
-            inspected += 1
-            if attribute(element, "AXIdentifier" as CFString) as? String == identifier {
-                if let enabled = attribute(element, kAXEnabledAttribute as CFString) as? Bool, !enabled {
-                    return MouseCaptureAXResult(point: nil, error: "Target UI control is disabled: \(identifier)")
-                }
-                if let position = attribute(element, kAXPositionAttribute as CFString),
-                   let size = attribute(element, kAXSizeAttribute as CFString),
-                   CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(size) == AXValueGetTypeID() {
-                    var origin = CGPoint.zero
-                    var dimensions = CGSize.zero
-                    let positionValue = unsafeBitCast(position, to: AXValue.self)
-                    let sizeValue = unsafeBitCast(size, to: AXValue.self)
-                    if AXValueGetValue(positionValue, .cgPoint, &origin), AXValueGetValue(sizeValue, .cgSize, &dimensions),
-                       dimensions.width > 0, dimensions.height > 0 {
-                        return MouseCaptureAXResult(point: CGPoint(x: origin.x + dimensions.width / 2, y: origin.y + dimensions.height / 2), error: nil)
-                    }
-                }
-            }
-            if let children = attribute(element, kAXChildrenAttribute as CFString) as? [AXUIElement] { stack.append(contentsOf: children) }
-        }
-        return MouseCaptureAXResult(point: nil, error: "Own-app AX identifier not found: \(identifier)")
-    }
-
-    nonisolated private static func attribute(_ element: AXUIElement, _ name: CFString) -> CFTypeRef? {
-        var value: CFTypeRef?
-        return AXUIElementCopyAttributeValue(element, name, &value) == .success ? value : nil
-    }
-}
-
-private struct MouseCaptureAXResult: Sendable {
-    let point: CGPoint?
-    let error: String?
 }
