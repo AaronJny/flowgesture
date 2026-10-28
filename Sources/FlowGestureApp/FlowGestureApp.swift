@@ -115,10 +115,23 @@ private final class FlowGestureRuntime: ObservableObject {
 private final class FlowGestureAppDelegate: NSObject, NSApplicationDelegate {
     let runtime = FlowGestureRuntime()
     private var settingsController: NSWindowController?
+    private var shortcutSmoke: ShortcutCaptureSmoke?
+    private var shortcutUISmoke: ShortcutCaptureUISmoke?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         showSettings()
+        if ProcessInfo.processInfo.arguments.contains("--shortcut-ui-smoke") {
+            let smoke = ShortcutCaptureUISmoke(model: runtime.model)
+            shortcutUISmoke = smoke
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { smoke.start() }
+        }
+        if ProcessInfo.processInfo.arguments.contains("--shortcut-capture-smoke") {
+            runtime.model.beginShortcutRecording(id: UUID())
+            let smoke = ShortcutCaptureSmoke()
+            shortcutSmoke = smoke
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { smoke.start() }
+        }
         if let index = ProcessInfo.processInfo.arguments.firstIndex(of: "--ui-review-screenshot"),
            ProcessInfo.processInfo.arguments.indices.contains(index + 1) {
             let path = ProcessInfo.processInfo.arguments[index + 1]
@@ -132,14 +145,21 @@ private final class FlowGestureAppDelegate: NSObject, NSApplicationDelegate {
     func showSettings() {
         if settingsController == nil {
             let root: AnyView
-            if ProcessInfo.processInfo.arguments.contains("--ui-review-screenshot") {
-                runtime.model.language = .simplifiedChinese
-                let example = Rule(name: "复制", trigger: .mouseButton(MouseButtonTrigger(button: .back)), actions: [.shortcut(FlowGestureCore.KeyboardShortcut(keyCode: 8, modifiers: .command))])
+            if ProcessInfo.processInfo.arguments.contains("--ui-review-screenshot") || ProcessInfo.processInfo.arguments.contains("--shortcut-ui-smoke") {
+                runtime.model.language = ProcessInfo.processInfo.arguments.contains("--shortcut-ui-smoke") ? .english : .simplifiedChinese
+                let example = Rule(name: "复制", trigger: .mouseButton(MouseButtonTrigger(button: .back)), actions: [.shortcut(FlowGestureCore.KeyboardShortcut(keyCode: ProcessInfo.processInfo.arguments.contains("--ui-review-manual-shortcut") ? 123 : 8, modifiers: .command))])
                 if ProcessInfo.processInfo.arguments.contains("--ui-review-scrolling") {
                     runtime.model.book.scroll.isEnabled = false
                     root = AnyView(SettingsView(initialTab: "Scrolling").environmentObject(runtime.model))
                 } else {
-                    root = AnyView(RuleEditor(rule: example, onSave: { _ in true }).environmentObject(runtime.model))
+                    root = AnyView(RuleEditor(rule: example, onSave: { rule in
+                        if let smoke = self.shortcutUISmoke {
+                            guard self.runtime.model.saveRule(rule) else { return false }
+                            smoke.saved(rule)
+                            return false
+                        }
+                        return true
+                    }).environmentObject(runtime.model))
                 }
             } else {
                 root = AnyView(SettingsView().environmentObject(runtime.model))

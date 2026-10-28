@@ -397,7 +397,9 @@ private struct ShortcutEditor: View {
     @EnvironmentObject private var model: AppModel
     @Binding var value: FlowGestureCore.KeyboardShortcut
     var showManualOptions = true
-    @State private var monitor: Any?
+    @State private var captureSession: ShortcutCaptureSession?
+    @State private var captureMessage: String?
+    @State private var manualExpanded = ProcessInfo.processInfo.arguments.contains("--ui-review-manual-shortcut")
     @State private var recording = false
     @State private var recorderID = UUID()
     var body: some View {
@@ -411,13 +413,14 @@ private struct ShortcutEditor: View {
                 recording ? stopRecording() : startRecording()
             }.buttonStyle(.borderedProminent)
             Text(model.mappingText("Press all keys together, such as ⌘C. Esc cancels.", "一起按下完整组合，例如 ⌘C。Esc 取消。")).font(.caption).foregroundStyle(.secondary)
-            if showManualOptions {
-                DisclosureGroup(model.mappingText("Manual key and modifiers", "手动键码与修饰键")) {
-                    VStack(spacing: 10) {
-                        TextField(model.t("Key code"), value: Binding(get: { Int(value.keyCode) }, set: { value.keyCode = UInt16(clamping: $0) }), format: .number).textFieldStyle(.roundedBorder)
-                        ModifiersEditor(value: $value.modifiers)
-                    }.padding(.top, 8)
-                }.font(.caption)
+            if let captureMessage { Text(captureMessage).font(.caption).foregroundStyle(.secondary) }
+            DisclosureGroup(model.mappingText("Build shortcut manually", "手动组合快捷键"), isExpanded: $manualExpanded) {
+                FriendlyShortcutBuilder(value: $value, showTechnicalCode: showManualOptions)
+                    .padding(.top, 10)
+            }.font(.callout)
+            .onChange(of: value) { _ in
+                // A manual edit supersedes a pending recorder instead of competing with it.
+                if recording { stopRecording() }
             }
         }
         .onDisappear { stopRecording() }
@@ -426,28 +429,80 @@ private struct ShortcutEditor: View {
     }
     private func startRecording() {
         stopRecording()
+        let session = ShortcutCaptureSession()
+        captureSession = session
+        captureMessage = nil
         recording = true
         model.beginShortcutRecording(id: recorderID)
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            guard model.activeShortcutRecorder == recorderID else { stopRecording(); return event }
-            if event.keyCode != 53 || !event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty {
-                var modifiers: ModifierKeys = []
-                if event.modifierFlags.contains(.command) { modifiers.insert(.command) }
-                if event.modifierFlags.contains(.option) { modifiers.insert(.option) }
-                if event.modifierFlags.contains(.control) { modifiers.insert(.control) }
-                if event.modifierFlags.contains(.shift) { modifiers.insert(.shift) }
-                if event.modifierFlags.contains(.function) { modifiers.insert(.function) }
-                value = FlowGestureCore.KeyboardShortcut(keyCode: event.keyCode, modifiers: modifiers)
-            }
-            stopRecording()
-            return nil
-        }
+        let started = session.start(onCaptured: { shortcut in
+            guard captureSession === session, model.activeShortcutRecorder == recorderID else { return }
+            value = shortcut
+            captureMessage = model.mappingText("Shortcut recorded", "快捷键已录制")
+        }, onStatus: { status in
+            guard captureSession === session else { return }
+            let parts = status.components(separatedBy: " / ")
+            captureMessage = model.mappingText(parts.first ?? status, parts.last ?? status)
+        }, onFinished: {
+            guard captureSession === session else { return }
+            captureSession = nil
+            recording = false
+            model.endShortcutRecording(id: recorderID)
+        })
+        if !started { stopRecording() }
     }
     private func stopRecording() {
-        if let monitor { NSEvent.removeMonitor(monitor) }
-        monitor = nil
+        let session = captureSession
+        captureSession = nil
+        session?.cancel()
         if recording { model.endShortcutRecording(id: recorderID) }
         recording = false
+    }
+
+}
+
+/// A user-facing alternative when macOS reserves a shortcut before a local
+/// event monitor can receive it. The selected modifier combination is preserved.
+private struct FriendlyShortcutBuilder: View {
+    @EnvironmentObject private var model: AppModel
+    @Binding var value: FlowGestureCore.KeyboardShortcut
+    let showTechnicalCode: Bool
+    private let arrows: [(UInt16, String, String)] = [(123, "← Left", "← 左"), (124, "→ Right", "→ 右"), (126, "↑ Up", "↑ 上"), (125, "↓ Down", "↓ 下")]
+    private let modifiers: [(ModifierKeys, String)] = [(.command, "Command ⌘"), (.control, "Control ⌃"), (.option, "Option ⌥"), (.shift, "Shift ⇧"), (.function, "Fn")]
+    private var commonKeys: [UInt16] { [123, 124, 126, 125, 49, 48, 36, 53, 51, 117, 115, 119, 116, 121, 0, 11, 8, 2, 14, 3, 5, 4, 34, 38, 40, 37, 46, 45, 31, 35, 12, 15, 1, 17, 32, 9, 13, 7, 16, 6, 29, 18, 19, 20, 21, 23, 22, 26, 28, 25, 122, 120, 99, 118, 96, 97, 98, 100, 101, 109, 103, 111] }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                ForEach(arrows, id: \.0) { item in
+                    Button(model.mappingText(item.1, item.2)) { cancelRecording(); value.keyCode = item.0 }
+                        .buttonStyle(.bordered).tint(value.keyCode == item.0 ? Color.accentColor : Color.secondary)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: 7) {
+                ForEach(modifiers.indices, id: \.self) { index in
+                    let item = modifiers[index]
+                    Toggle(item.1, isOn: Binding(get: { value.modifiers.contains(item.0) }, set: { enabled in
+                        cancelRecording()
+                        if enabled { value.modifiers.insert(item.0) } else { value.modifiers.remove(item.0) }
+                    })).toggleStyle(.button)
+                }
+            }
+            Picker(model.mappingText("Key", "按键"), selection: Binding(get: { value.keyCode }, set: { cancelRecording(); value.keyCode = $0 })) {
+                ForEach(commonKeys, id: \.self) { code in Text(MappingLabels.key(code)).tag(code) }
+                if !commonKeys.contains(value.keyCode) {
+                    Text(MappingLabels.key(value.keyCode)).tag(value.keyCode)
+                }
+            }
+            Text(model.mappingText("Use your actual system shortcut. Command ⌘ and Control ⌃ are different; combine any modifiers you need.", "请选择你实际使用的系统组合。Command ⌘ 与 Control ⌃ 不同，可任意组合修饰键。")).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if showTechnicalCode {
+                DisclosureGroup(model.mappingText("Technical key code", "技术选项：键码")) {
+                    TextField(model.t("Key code"), value: Binding(get: { Int(value.keyCode) }, set: { cancelRecording(); value.keyCode = UInt16(clamping: $0) }), format: .number).textFieldStyle(.roundedBorder)
+                }.font(.caption)
+            }
+        }
+    }
+    private func cancelRecording() {
+        if let recorder = model.activeShortcutRecorder { model.endShortcutRecording(id: recorder) }
     }
 }
 
@@ -583,6 +638,10 @@ private struct QuickActionEditor: View {
         switch action {
         case .shortcut(let shortcut):
             if forceCustomShortcut { return "shortcut" }
+            if shortcut.modifiers == .control {
+                if shortcut.keyCode == 123 { return "previousDesktop" }
+                if shortcut.keyCode == 124 { return "nextDesktop" }
+            }
             if shortcut.modifiers == .command {
                 switch shortcut.keyCode { case 8: return "copy"; case 9: return "paste"; case 33: return "back"; case 30: return "forward"; default: break }
             }
@@ -598,6 +657,8 @@ private struct QuickActionEditor: View {
             Text(model.mappingText("Paste", "粘贴")).tag("paste")
             Text(model.mappingText("Back", "后退")).tag("back")
             Text(model.mappingText("Forward", "前进")).tag("forward")
+            Text(model.mappingText("Previous desktop (default ⌃←)", "上一桌面（默认 ⌃←）")).tag("previousDesktop")
+            Text(model.mappingText("Next desktop (default ⌃→)", "下一桌面（默认 ⌃→）")).tag("nextDesktop")
             Text(model.mappingText("Keyboard shortcut", "自定义快捷键")).tag("shortcut")
             Text(model.mappingText("Move / resize window", "移动 / 调整窗口")).tag("window")
             Text(model.mappingText("Open an app", "打开应用")).tag("app")
@@ -607,6 +668,9 @@ private struct QuickActionEditor: View {
         switch action {
         case .shortcut:
             ShortcutEditor(value: caseBinding($action, fallback: FlowGestureCore.KeyboardShortcut(keyCode: 8, modifiers: .command), extract: { if case .shortcut(let value) = $0 { return value }; return nil }, embed: Action.shortcut), showManualOptions: false)
+            if preset == "previousDesktop" || preset == "nextDesktop" {
+                Text(model.mappingText("If you customized desktop shortcuts in macOS, record or build that exact combination instead.", "如果你修改过 macOS 的桌面快捷键，请录制或手动组合你实际使用的按键。")).font(.caption).foregroundStyle(.secondary)
+            }
         case .window:
             Image(systemName: "macwindow").font(.system(size: 46)).foregroundStyle(Color.accentColor).frame(maxWidth: .infinity).padding(.vertical, 10)
             Picker(model.t("Window"), selection: caseBinding($action, fallback: WindowAction.maximize, extract: { if case .window(let value) = $0 { return value }; return nil }, embed: Action.window)) {
@@ -629,6 +693,8 @@ private struct QuickActionEditor: View {
         case "paste": action = .shortcut(FlowGestureCore.KeyboardShortcut(keyCode: 9, modifiers: .command))
         case "back": action = .shortcut(FlowGestureCore.KeyboardShortcut(keyCode: 33, modifiers: .command))
         case "forward": action = .shortcut(FlowGestureCore.KeyboardShortcut(keyCode: 30, modifiers: .command))
+        case "previousDesktop": action = .shortcut(FlowGestureCore.KeyboardShortcut(keyCode: 123, modifiers: .control))
+        case "nextDesktop": action = .shortcut(FlowGestureCore.KeyboardShortcut(keyCode: 124, modifiers: .control))
         case "window": action = .window(.maximize)
         case "app": action = .openApplication("com.apple.finder")
         default: action = .system(.missionControl)
@@ -661,6 +727,7 @@ private struct ActionEditor: View {
             HStack {
                 TextField(model.t("File or folder path"), text: stringBinding)
                 Button(model.t("Choose…")) {
+                    if let recorder = model.activeShortcutRecorder { model.endShortcutRecording(id: recorder) }
                     let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = true
                     if panel.runModal() == .OK, let url = panel.url { action = .openPath(url.path) }
                 }
