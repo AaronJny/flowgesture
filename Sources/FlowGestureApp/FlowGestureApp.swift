@@ -2,39 +2,40 @@ import AppKit
 import ApplicationServices
 import Combine
 import SwiftUI
+import Darwin
 
 @main
 @MainActor
 struct FlowGestureApp: App {
     @NSApplicationDelegateAdaptor(FlowGestureAppDelegate.self) private var appDelegate
-    @StateObject private var runtime = FlowGestureRuntime()
 
     var body: some Scene {
         MenuBarExtra {
-            FlowGestureMenu().environmentObject(runtime.model)
+            FlowGestureMenu(showSettings: appDelegate.showSettings).environmentObject(appDelegate.runtime.model)
         } label: {
-            Image(systemName: runtime.model.isEnabled ? "cursorarrow.motionlines" : "pause.circle")
+            FlowGestureMenuIcon().environmentObject(appDelegate.runtime.model)
         }
-        Window("FlowGesture", id: "settings") {
-            SettingsView().environmentObject(runtime.model)
-                .onAppear { NSApp.activate(ignoringOtherApps: true) }
-        }
-        .defaultSize(width: 980, height: 740)
-        .windowResizability(.contentMinSize)
+
+    }
+}
+
+private struct FlowGestureMenuIcon: View {
+    @EnvironmentObject private var model: AppModel
+    var body: some View {
+        Image(systemName: model.isEnabled ? "cursorarrow.motionlines" : "pause.circle")
     }
 }
 
 private struct FlowGestureMenu: View {
     @EnvironmentObject private var model: AppModel
-    @Environment(\.openWindow) private var openWindow
+    let showSettings: () -> Void
     var body: some View {
         Text("FlowGesture")
         Text(model.t(model.engineStatus))
         Divider()
         Toggle(model.t("Enable FlowGesture"), isOn: $model.isEnabled).disabled(model.configurationLoadError != nil)
         Button(model.t("FlowGesture Settings…")) {
-            openWindow(id: "settings")
-            NSApp.activate(ignoringOtherApps: true)
+            showSettings()
         }.keyboardShortcut(",")
         Divider()
         Button(model.t("Quit FlowGesture")) { NSApp.terminate(nil) }.keyboardShortcut("q")
@@ -99,9 +100,72 @@ private final class FlowGestureRuntime: ObservableObject {
     }
 }
 
+@MainActor
 private final class FlowGestureAppDelegate: NSObject, NSApplicationDelegate {
+    let runtime = FlowGestureRuntime()
+    private var settingsController: NSWindowController?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        showSettings()
+        if ProcessInfo.processInfo.arguments.contains("--ui-smoke-test") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.checkVisibleWindowThenReopen() }
+        }
+    }
+
+    func showSettings() {
+        if settingsController == nil {
+            let content = NSHostingController(rootView: SettingsView().environmentObject(runtime.model))
+            let window = NSWindow(contentViewController: content)
+            window.title = "FlowGesture"
+            window.identifier = NSUserInterfaceItemIdentifier("FlowGesture.settings")
+            window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+            window.setContentSize(NSSize(width: 980, height: 740))
+            window.minSize = NSSize(width: 880, height: 640)
+            window.isReleasedWhenClosed = false
+            window.center()
+            settingsController = NSWindowController(window: window)
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        settingsController?.showWindow(nil)
+        settingsController?.window?.deminiaturize(nil)
+        settingsController?.window?.makeKeyAndOrderFront(nil)
+        settingsController?.window?.orderFrontRegardless()
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        showSettings()
+        return false
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    // Opt-in CI entrypoint exercises the production launch/reopen path. It never
+    // grants input permissions or executes an input rule. WindowServer evidence
+    // tests a real rendered window, not just a living background process.
+    private func windowIsOnScreen() -> Bool {
+        guard let window = settingsController?.window, window.isVisible,
+              !window.isMiniaturized, window.contentView != nil else { return false }
+        let entries = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+        return entries.contains {
+            ($0[kCGWindowOwnerPID as String] as? Int) == Int(getpid()) &&
+            ($0[kCGWindowNumber as String] as? Int) == window.windowNumber
+        }
+    }
+    private func checkVisibleWindowThenReopen() {
+        guard windowIsOnScreen(), let window = settingsController?.window else {
+            fputs("FAIL: launch did not present a settings window on screen\n", stderr); exit(1)
+        }
+        window.close()
+        guard !window.isVisible else {
+            fputs("FAIL: settings window did not close\n", stderr); exit(1)
+        }
+        _ = applicationShouldHandleReopen(NSApp, hasVisibleWindows: false)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            guard self.windowIsOnScreen(), self.settingsController?.window === window else {
+                fputs("FAIL: reopen did not restore the same settings window\n", stderr); exit(1)
+            }
+            print("PASS: settings window visible in WindowServer at launch and after close/reopen")
+            exit(0)
+        }
+    }
 }
