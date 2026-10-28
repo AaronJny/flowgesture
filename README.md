@@ -29,4 +29,6 @@ FlowGesture is a native macOS app for custom gestures, smoother scrolling and ev
 3. Grant **Accessibility** and **Input Monitoring** in System Settings → Privacy & Security, then refresh the permission status.
 4. Choose **Add examples** to try a setup, or **Add rule** to create your own. Enable FlowGesture when you are ready.
 
+**First launch:** If macOS says the developer cannot be verified, first confirm you downloaded the app from this repository’s Releases. After trying to open it, go to **System Settings → Privacy & Security → Open Anyway**, then confirm **Open**, following [Apple’s instructions](https://support.apple.com/en-us/102445). This allows the app to open; **Accessibility** and **Input Monitoring** permissions are granted separately in step 3.
+
 You can pause or quit from the menu bar at any time. AppleScript actions that control another app may also request **Automation** permission.
