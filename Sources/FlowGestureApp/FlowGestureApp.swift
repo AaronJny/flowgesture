@@ -61,7 +61,7 @@ private final class FlowGestureRuntime: ObservableObject {
     init() {
         // Relay nested model changes so the menu-bar icon updates as well as its content.
         modelSubscription = model.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
-        engine.onStatus = { [weak model] in model?.engineStatus = $0 }
+        engine.onStatus = { [weak model] in model?.engineStatus = $0.components(separatedBy: " / ").first ?? $0 }
         engine.onScrollStatus = { [weak model] in model?.scrollStatus = $0 }
         engine.onEvent = { [weak model] in model?.lastEvent = $0 }
         engine.onError = { [weak model] in model?.errorMessage = $0 }
@@ -136,6 +136,7 @@ private final class FlowGestureAppDelegate: NSObject, NSApplicationDelegate {
                 runtime.model.language = .simplifiedChinese
                 let example = Rule(name: "复制", trigger: .mouseButton(MouseButtonTrigger(button: .back)), actions: [.shortcut(FlowGestureCore.KeyboardShortcut(keyCode: 8, modifiers: .command))])
                 if ProcessInfo.processInfo.arguments.contains("--ui-review-scrolling") {
+                    runtime.model.book.scroll.isEnabled = false
                     root = AnyView(SettingsView(initialTab: "Scrolling").environmentObject(runtime.model))
                 } else {
                     root = AnyView(RuleEditor(rule: example, onSave: { _ in true }).environmentObject(runtime.model))
@@ -168,6 +169,12 @@ private final class FlowGestureAppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     private func captureRuleEditor(to path: String) {
+        if ProcessInfo.processInfo.arguments.contains("--ui-review-scrolling") {
+            guard !runtime.model.isScrollAdjustmentActive,
+                  runtime.model.scrollAdjustmentStatus == "Scroll adjustments are off" else {
+                fputs("FAIL: scroll-off UI claimed active adjustment\n", stderr); exit(1)
+            }
+        }
         guard windowIsOnScreen(), let window = settingsController?.window,
               let image = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber), [.boundsIgnoreFraming, .bestResolution]) else {
             fputs("FAIL: could not capture visible rule editor\n", stderr); exit(1)

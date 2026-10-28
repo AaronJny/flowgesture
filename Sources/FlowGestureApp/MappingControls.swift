@@ -59,12 +59,24 @@ struct MouseButtonCaptureSurface: NSViewRepresentable {
         var onCapture: ((Int, NSEvent.ModifierFlags) -> Void)?
         override var acceptsFirstResponder: Bool { true }
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-        override func mouseDown(with event: NSEvent) { onCapture?(event.buttonNumber, event.modifierFlags) }
-        override func rightMouseDown(with event: NSEvent) { onCapture?(event.buttonNumber, event.modifierFlags) }
-        override func otherMouseDown(with event: NSEvent) { onCapture?(event.buttonNumber, event.modifierFlags) }
-        override func mouseUp(with event: NSEvent) {}
-        override func rightMouseUp(with event: NSEvent) {}
-        override func otherMouseUp(with event: NSEvent) {}
+        private var pendingButton: Int?
+        private var pendingFlags: NSEvent.ModifierFlags = []
+        private func begin(_ event: NSEvent) { guard pendingButton == nil else { return }; pendingButton = event.buttonNumber; pendingFlags = event.modifierFlags }
+        private func finish(_ event: NSEvent) {
+            guard let number = pendingButton, number == event.buttonNumber else { return }
+            pendingButton = nil
+            onCapture?(number, pendingFlags)
+        }
+        override func mouseDown(with event: NSEvent) { begin(event) }
+        override func rightMouseDown(with event: NSEvent) { begin(event) }
+        override func otherMouseDown(with event: NSEvent) { begin(event) }
+        override func mouseDragged(with event: NSEvent) {}
+        override func rightMouseDragged(with event: NSEvent) {}
+        override func otherMouseDragged(with event: NSEvent) {}
+        override func mouseUp(with event: NSEvent) { finish(event) }
+        override func rightMouseUp(with event: NSEvent) { finish(event) }
+        override func otherMouseUp(with event: NSEvent) { finish(event) }
+
     }
 }
 
@@ -109,7 +121,8 @@ struct CompactApplicationScopeEditor: View {
                             Image(systemName: "app")
                             Text(appName(identifier)).lineLimit(1)
                             Spacer(minLength: 0)
-                            Button { scope.bundleIdentifiers.remove(identifier) } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }.buttonStyle(.plain)
+                            Button { scope.bundleIdentifiers.remove(identifier) } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }.buttonStyle(.plain).disabled(scope.bundleIdentifiers.count == 1)
+                                .help(model.mappingText("Choose All apps to remove the final restriction.", "如需全局应用，请明确切换到所有应用。"))
                         }.padding(7).background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 7))
                     }
                     Button { chooseApplication() } label: { Label(model.mappingText("Add app", "添加应用"), systemImage: "plus") }

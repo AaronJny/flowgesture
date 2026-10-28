@@ -160,9 +160,9 @@ private struct ScrollingPane: View {
     var body: some View {
         Form {
             Section {
-                Label(model.t(model.engineRunning ? "Scroll engine is running" : "Scroll engine is not running"),
-                      systemImage: model.engineRunning ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                    .foregroundStyle(model.engineRunning ? Color.green : Color.orange)
+                Label(model.t(model.scrollAdjustmentStatus),
+                      systemImage: model.isScrollAdjustmentActive ? "checkmark.circle.fill" : "pause.circle")
+                    .foregroundStyle(model.isScrollAdjustmentActive ? Color.green : Color.secondary)
                 if !model.isEnabled {
                     Text(model.t("FlowGesture is paused. Enable it to apply scrolling changes."))
                     Button(model.t("Enable FlowGesture")) { model.isEnabled = true }

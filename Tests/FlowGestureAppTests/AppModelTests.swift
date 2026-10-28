@@ -69,4 +69,20 @@ final class AppModelTests: XCTestCase {
         }
     }
 
+    @MainActor func testScrollOffNeverReportsActiveEvenWhenEngineIsRunning() async throws {
+        try isolated { directory in
+            let model = AppModel(directory: directory)
+            model.engineRunning = true
+            model.book.scroll.isEnabled = false
+            XCTAssertFalse(model.isScrollAdjustmentActive)
+            XCTAssertEqual(model.scrollAdjustmentStatus, "Scroll adjustments are off")
+            model.book.scroll.isEnabled = true
+            XCTAssertTrue(model.isScrollAdjustmentActive)
+            XCTAssertEqual(model.scrollAdjustmentStatus, "Scroll engine is running")
+            model.engineRunning = false
+            XCTAssertFalse(model.isScrollAdjustmentActive)
+            XCTAssertEqual(model.scrollAdjustmentStatus, "Scroll engine is not running")
+        }
+    }
+
 }

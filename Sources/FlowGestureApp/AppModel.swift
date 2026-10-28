@@ -106,6 +106,12 @@ final class AppModel: ObservableObject {
         }
     }
 
+    var isScrollAdjustmentActive: Bool { engineRunning && book.scroll.isEnabled }
+    var scrollAdjustmentStatus: String {
+        if !book.scroll.isEnabled { return "Scroll adjustments are off" }
+        return engineRunning ? "Scroll engine is running" : "Scroll engine is not running"
+    }
+
     func t(_ key: String) -> String { L10n.text(key, language: language) }
 
     /// Invoke after assigning the native engine callbacks to apply the loaded state.
@@ -332,6 +338,7 @@ final class AppModel: ObservableObject {
     }
 
     func chooseApplication() -> String? {
+        if let recorder = activeShortcutRecorder { endShortcutRecording(id: recorder) }
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.applicationBundle]
         panel.directoryURL = URL(fileURLWithPath: "/Applications", isDirectory: true)

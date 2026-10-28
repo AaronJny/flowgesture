@@ -429,6 +429,7 @@ private struct ShortcutEditor: View {
         recording = true
         model.beginShortcutRecording(id: recorderID)
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard model.activeShortcutRecorder == recorderID else { stopRecording(); return event }
             if event.keyCode != 53 || !event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty {
                 var modifiers: ModifierKeys = []
                 if event.modifierFlags.contains(.command) { modifiers.insert(.command) }
