@@ -10,10 +10,25 @@ final class ActionExecutor {
         // Ordered serial execution preserves action-list semantics, including scripts.
         scriptQueue.async { [weak self] in
             guard let self else { return }
+            var targetApp = app
             for action in actions {
                 switch action {
                 case .appleScript(let text): self.script(text)
-                default: DispatchQueue.main.sync { self.perform(action, app: app) }
+                case .openApplication(let identifier):
+                    let result = ApplicationLaunchResult()
+                    let completed = DispatchSemaphore(value: 0)
+                    DispatchQueue.main.async {
+                        self.openApplication(identifier) { application in
+                            result.store(application); completed.signal()
+                        }
+                    }
+                    guard completed.wait(timeout: .now() + 15) == .success else {
+                        self.fail("Application launch timed out / 应用启动超时"); return
+                    }
+                    guard let launched = result.read() else { return }
+                    targetApp = launched
+                    DispatchQueue.main.sync { _ = launched.activate(options: .activateIgnoringOtherApps) }
+                default: DispatchQueue.main.sync { self.perform(action, app: targetApp) }
                 }
             }
         }
@@ -22,19 +37,24 @@ final class ActionExecutor {
         switch action {
         case .shortcut(let shortcut): shortcutEvent(shortcut)
         case .openURL(let value):
-            guard let url = URL(string: value), ["https", "http", "file", "mailto"].contains(url.scheme?.lowercased() ?? "") else { fail("Invalid URL / 无效网址"); return }
+            guard let url = URL(string: value), let scheme = url.scheme, !scheme.isEmpty else { fail("Invalid URL / 无效网址"); return }
             if !NSWorkspace.shared.open(url) { fail("Could not open URL / 无法打开网址") }
         case .openPath(let path):
             if !NSWorkspace.shared.open(URL(fileURLWithPath: NSString(string: path).expandingTildeInPath)) { fail("Could not open path / 无法打开路径") }
-        case .openApplication(let identifier):
-            let url = identifier.hasPrefix("/") ? URL(fileURLWithPath: identifier) : NSWorkspace.shared.urlForApplication(withBundleIdentifier: identifier)
-            guard let url else { fail("Application not found / 找不到应用：\(identifier)"); return }
-            NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration()) { [weak self] _, error in if let error { self?.fail(error.localizedDescription) } }
+        case .openApplication: break // Serialized by execute, including launch completion.
         case .appleScript: break
         case .menuItem(let path): menu(path, app: app)
         case .window(let operation): window(operation, custom: nil, app: app)
         case .windowFrame(let x, let y, let width, let height): window(.maximize, custom: CGRect(x: x, y: y, width: width, height: height), app: app)
         case .system(let system): systemAction(system)
+        }
+    }
+    private func openApplication(_ identifier: String, completion: @escaping (NSRunningApplication?) -> Void) {
+        let url = identifier.hasPrefix("/") ? URL(fileURLWithPath: identifier) : NSWorkspace.shared.urlForApplication(withBundleIdentifier: identifier)
+        guard let url else { fail("Application not found / 找不到应用：\(identifier)"); completion(nil); return }
+        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration()) { [weak self] application, error in
+            if let error { self?.fail(error.localizedDescription) }
+            completion(application)
         }
     }
     private func fail(_ message: String) { DispatchQueue.main.async { [weak self] in self?.onError?(message) } }
@@ -98,7 +118,7 @@ final class ActionExecutor {
             guard custom.minX.isFinite, custom.minY.isFinite, custom.width.isFinite, custom.height.isFinite,
                   custom.minX >= 0, custom.minY >= 0, custom.width > 0, custom.height > 0,
                   custom.maxX <= 1, custom.maxY <= 1 else { fail("Window fractions must fit 0…1 / 窗口比例必须位于0…1"); return }
-            target = CGRect(x: frame.minX+custom.minX*frame.width, y: frame.minY+custom.minY*frame.height, width: custom.width*frame.width, height: custom.height*frame.height)
+            target = CGRect(x: frame.minX+custom.minX*frame.width, y: frame.minY+(1-custom.minY-custom.height)*frame.height, width: custom.width*frame.width, height: custom.height*frame.height)
         } else {
             switch operation {
             case .center: target = CGRect(x: frame.midX-size.width/2, y: frame.midY-size.height/2, width: size.width, height: size.height)
@@ -133,4 +153,11 @@ final class ActionExecutor {
             }
         }
     }
+}
+
+private final class ApplicationLaunchResult {
+    private let lock = NSLock()
+    private var application: NSRunningApplication?
+    func store(_ value: NSRunningApplication?) { lock.lock(); application = value; lock.unlock() }
+    func read() -> NSRunningApplication? { lock.lock(); defer { lock.unlock() }; return application }
 }

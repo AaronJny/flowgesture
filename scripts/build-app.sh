@@ -3,7 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 swift build -c release --arch arm64 --arch x86_64
 BIN_DIR="$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)"
-lipo -verify_arch arm64 x86_64 "$BIN_DIR/FlowGesture"
+lipo "$BIN_DIR/FlowGesture" -verify_arch arm64 x86_64
 APP="$PWD/build/FlowGesture.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN_DIR/FlowGesture" "$APP/Contents/MacOS/FlowGesture"

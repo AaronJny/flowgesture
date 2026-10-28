@@ -6,7 +6,7 @@ struct RuleEditor: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
     @State var rule: Rule
-    let onSave: (Rule) -> Void
+    let onSave: (Rule) -> Bool
 
     private var issues: [RuleValidationIssue] { RuleBook(rules: [rule]).validationIssues() }
 
@@ -67,7 +67,7 @@ struct RuleEditor: View {
             HStack {
                 Spacer()
                 Button(model.t("Cancel")) { dismiss() }.keyboardShortcut(.cancelAction)
-                Button(model.t("Save")) { onSave(rule); dismiss() }
+                Button(model.t("Save")) { if onSave(rule) { dismiss() } }
                     .keyboardShortcut(.defaultAction).disabled(!issues.isEmpty)
             }.padding(18)
         }.frame(minWidth: 650, idealWidth: 700, minHeight: 650, idealHeight: 780)

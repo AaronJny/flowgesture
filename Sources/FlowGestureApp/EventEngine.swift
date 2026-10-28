@@ -27,6 +27,8 @@ final class EventEngine {
     private var scrollTimer: Timer?
     private var smoother = ScrollSmoother()
     private var scrollFlags: CGEventFlags = []
+    private var scrollSource: UInt64?
+    private var scrollLocation = CGPoint.zero
     private var workspaceObservers: [NSObjectProtocol] = []
     var isRunning: Bool { tap != nil }
 
@@ -98,7 +100,7 @@ final class EventEngine {
         source = nil; tap = nil
         touch.stop(); touchRecognizers.removeAll()
         scrollTimer?.invalidate(); scrollTimer = nil; smoother.reset()
-        swallowedKeys.removeAll(); corner = nil
+        swallowedKeys.removeAll(); discardedButton = nil; corner = nil; scrollSource = nil
         onStatus?("Paused / 已暂停")
     }
     func refreshDiagnostics() { touch.refreshDiagnostics() }
@@ -130,7 +132,10 @@ final class EventEngine {
             if fire(.keyboard(KeyboardShortcut(keyCode: code, modifiers: mods))) { swallowedKeys.insert(code); return nil }
         }
         if type == .scrollWheel { return processScroll(event) }
-        if type == .mouseMoved { checkCorner(event.location, modifiers: mods) }
+        if type == .mouseMoved {
+            if hypot(event.location.x - scrollLocation.x, event.location.y - scrollLocation.y) > 2 { smoother.reset() }
+            checkCorner(event.location, modifiers: mods)
+        }
         let down = [.leftMouseDown,.rightMouseDown,.otherMouseDown].contains(type)
         let up = [.leftMouseUp,.rightMouseUp,.otherMouseUp].contains(type)
         let dragged = [.leftMouseDragged,.rightMouseDragged,.otherMouseDragged].contains(type)
@@ -190,7 +195,10 @@ final class EventEngine {
         // Device identity is preferred. Unknown continuous sources remain untouched.
         let continuous = event.getIntegerValueField(.scrollWheelEventIsContinuous) != 0
         let identity = EventDeviceIdentity.info(for: event)
-        if identity.kind != .mouse && !book.scroll.affectsContinuousScrolling { return Unmanaged.passUnretained(event) }
+        if identity.senderID != scrollSource || hypot(event.location.x - scrollLocation.x, event.location.y - scrollLocation.y) > 2 { smoother.reset() }
+        scrollSource = identity.senderID
+        scrollLocation = event.location
+        if identity.kind != .mouse && !book.scroll.affectsContinuousScrolling { smoother.reset(); return Unmanaged.passUnretained(event) }
         let rawV = continuous ? event.getDoubleValueField(.scrollWheelEventPointDeltaAxis1) : event.getDoubleValueField(.scrollWheelEventDeltaAxis1) * 10
         let rawH = continuous ? event.getDoubleValueField(.scrollWheelEventPointDeltaAxis2) : event.getDoubleValueField(.scrollWheelEventDeltaAxis2) * 10
         let value = book.scroll.transform(vertical: rawV, horizontal: rawH, isContinuous: false)
@@ -205,7 +213,7 @@ final class EventEngine {
             return Unmanaged.passUnretained(event)
         }
         guard let output = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: Int32(value.vertical.rounded()), wheel2: Int32(value.horizontal.rounded()), wheel3: 0) else { return Unmanaged.passUnretained(event) }
-        output.flags = event.flags; output.setIntegerValueField(.eventSourceUserData, value: Self.syntheticTag)
+        output.location = event.location; output.flags = event.flags; output.setIntegerValueField(.eventSourceUserData, value: Self.syntheticTag)
         output.post(tap: .cgSessionEventTap); return nil
     }
     private func tickScroll() {
@@ -213,7 +221,7 @@ final class EventEngine {
         let v = step.vertical, h = step.horizontal
         guard v != 0 || h != 0 else { return }
         guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: v, wheel2: h, wheel3: 0) else { return }
-        event.flags = scrollFlags; event.setIntegerValueField(.eventSourceUserData, value: Self.syntheticTag); event.post(tap: .cgSessionEventTap)
+        event.location = scrollLocation; event.flags = scrollFlags; event.setIntegerValueField(.eventSourceUserData, value: Self.syntheticTag); event.post(tap: .cgSessionEventTap)
     }
     private func checkCorner(_ point: CGPoint, modifiers: ModifierKeys) {
         guard let primary = NSScreen.screens.first else { return }

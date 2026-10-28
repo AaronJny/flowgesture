@@ -41,6 +41,7 @@ struct SettingsView: View {
                         HStack {
                             Button(model.t("Restore previous backup…")) { model.restoreBackup() }
                             Button(model.t("Import JSON…")) { model.importConfiguration() }
+                            Button(model.t("Create empty configuration")) { model.startWithEmptyConfiguration() }
                         }
                     }.padding(14).frame(maxWidth: .infinity, alignment: .leading).background(.orange.opacity(0.14))
                 }

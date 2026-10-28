@@ -20,6 +20,10 @@ enum L10n {
     }
 
     private static let zh: [String: String] = [
+        "Start with an empty configuration?": "使用空配置重新开始？",
+        "The original file will be archived, not deleted. All rules and scroll settings will be reset, and FlowGesture will stay paused.": "原文件将被归档，不会删除。所有规则和滚动设置将重置，FlowGesture 仍保持暂停。",
+        "Create empty configuration": "创建空配置",
+        "An empty configuration was created. The original file is preserved in the configuration folder.": "已创建空配置。原文件保存在配置文件夹中。",
         "Add examples": "添加示例", "Back — draw left": "后退 — 向左绘制", "Forward — draw right": "前进 — 向右绘制",
         "Back — side button": "后退 — 侧键", "Forward — side button": "前进 — 侧键", "Mission Control — three-finger tap": "调度中心 — 三指轻点",
         "Rules": "规则", "Scrolling": "滚动", "Settings": "设置", "Diagnostics": "诊断",

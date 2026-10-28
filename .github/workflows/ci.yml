@@ -10,6 +10,8 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Toolchain
         run: swift --version
       - name: Native bridge tests
@@ -18,6 +20,8 @@ jobs:
         run: swift test
       - name: Build app
         run: bash scripts/build-app.sh
+      - name: Launch smoke test
+        run: bash scripts/smoke-test-app.sh
       - uses: actions/upload-artifact@v4
         with:
           name: FlowGesture-macos

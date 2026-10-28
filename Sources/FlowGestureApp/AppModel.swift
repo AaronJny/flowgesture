@@ -124,11 +124,13 @@ final class AppModel: ObservableObject {
         book.rules.append(contentsOf: additions)
     }
 
-    func saveRule(_ rule: Rule) {
+    @discardableResult
+    func saveRule(_ rule: Rule) -> Bool {
         var next = book
         if let index = next.rules.firstIndex(where: { $0.id == rule.id }) { next.rules[index] = rule }
         else { next.rules.append(rule) }
         book = next
+        return book == next
     }
 
     func deleteRule(id: UUID) { book.rules.removeAll { $0.id == id } }
@@ -168,6 +170,14 @@ final class AppModel: ObservableObject {
         do {
             try Self.encoded(book).write(to: url, options: .atomic)
             notice = t("Configuration exported")
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    func startWithEmptyConfiguration() {
+        guard confirm(title: "Start with an empty configuration?", message: "The original file will be archived, not deleted. All rules and scroll settings will be reset, and FlowGesture will stay paused.", primary: "Create empty configuration") else { return }
+        do {
+            try replaceConfiguration(RuleBook(), pause: true)
+            notice = t("An empty configuration was created. The original file is preserved in the configuration folder.")
         } catch { errorMessage = error.localizedDescription }
     }
 
