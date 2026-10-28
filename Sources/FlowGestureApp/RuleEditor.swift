@@ -7,86 +7,159 @@ struct RuleEditor: View {
     @Environment(\.dismiss) private var dismiss
     @State var rule: Rule
     let onSave: (Rule) -> Bool
+    @State private var advanced = false
 
-    private var issues: [RuleValidationIssue] { RuleBook(rules: [rule]).validationIssues() }
+    private var issues: [RuleValidationIssue] {
+        var candidate = rule
+        if candidate.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { candidate.name = "Mapping" }
+        return RuleBook(rules: [candidate]).validationIssues()
+    }
+    private var firstAction: Binding<Action> {
+        Binding(get: { rule.actions.first ?? .shortcut(FlowGestureCore.KeyboardShortcut(keyCode: 8, modifiers: .command)) }, set: {
+            if rule.actions.isEmpty { rule.actions = [$0] } else { rule.actions[0] = $0 }
+        })
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text(model.t("Edit rule")).font(.title2.bold())
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(model.mappingText("Button mapping", "按键映射")).font(.title2.bold())
+                    Text(model.mappingText("Press a button. Choose what it does.", "按下一个键，再选择它要做什么。")).font(.callout).foregroundStyle(.secondary)
+                }
                 Spacer()
                 Toggle(model.t("Enabled"), isOn: $rule.isEnabled).toggleStyle(.switch)
-            }.padding(22)
+            }.padding(.horizontal, 26).padding(.vertical, 18)
             Divider()
-            Form {
-                Section {
-                    TextField(model.t("Name"), text: $rule.name)
-                    Stepper("\(model.t("Priority")): \(rule.priority)", value: $rule.priority, in: -1000...1000)
-                    Text(model.t("Application-specific rules run first, then higher priority, then saved order. Only the first match runs.")).font(.caption).foregroundStyle(.secondary)
-                }
-                Section(model.t("Trigger")) {
-                    Picker(model.t("Trigger"), selection: Binding(get: { TriggerKind(rule.trigger) }, set: { rule.trigger = $0.initial })) {
-                        ForEach(TriggerKind.allCases) { Text(model.t($0.rawValue)).tag($0) }
-                    }
-                    triggerEditor
-                }
-                Section(model.t("Application scope")) { ApplicationScopeEditor(scope: $rule.scope) }
-                Section(model.t("Actions")) {
-                    ForEach(Array(rule.actions.indices), id: \.self) { index in
-                        VStack(alignment: .leading, spacing: 10) {
-                            HStack {
-                                Text("\(index + 1)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                                Spacer()
-                                Button { rule.actions.swapAt(index, index - 1) } label: { Image(systemName: "arrow.up") }
-                                    .disabled(index == 0).help(model.t("Move up"))
-                                Button { rule.actions.swapAt(index, index + 1) } label: { Image(systemName: "arrow.down") }
-                                    .disabled(index == rule.actions.count - 1).help(model.t("Move down"))
-                                Button(role: .destructive) { rule.actions.remove(at: index) } label: { Image(systemName: "trash") }
-                                    .help(model.t("Remove"))
-                            }.buttonStyle(.borderless)
-                            ActionEditor(action: Binding(get: {
-                                rule.actions.indices.contains(index) ? rule.actions[index] : .system(.missionControl)
-                            }, set: { updated in
-                                if rule.actions.indices.contains(index) { rule.actions[index] = updated }
-                            }))
-                        }.padding(.vertical, 8)
-                    }
-                    Button { rule.actions.append(.shortcut(FlowGestureCore.KeyboardShortcut(keyCode: 8, modifiers: .command))) } label: {
-                        Label(model.t("Add action"), systemImage: "plus")
-                    }
-                }
-                if !issues.isEmpty {
-                    Section(model.t("Rule validation")) {
-                        ForEach(Array(issues.enumerated()), id: \.offset) { _, issue in
-                            Text(issue.message).font(.caption).foregroundStyle(.red)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    HStack(spacing: 14) {
+                        Text(MappingLabels.trigger(rule.trigger, model: model)).lineLimit(1)
+                        Image(systemName: "arrow.right").foregroundStyle(.secondary)
+                        Text(MappingLabels.action(rule.actions.first, model: model)).foregroundStyle(Color.accentColor).lineLimit(1)
+                        if rule.actions.count > 1 { Text("+\(rule.actions.count - 1)").font(.subheadline).foregroundStyle(.secondary) }
+                        Spacer(minLength: 0)
+                    }.font(.title2.weight(.semibold)).padding(.horizontal, 4)
+                    HStack(alignment: .top, spacing: 18) {
+                        mappingCard(number: "1", title: model.mappingText("Which button?", "按哪个键？")) {
+                            Picker(model.mappingText("Input", "输入方式"), selection: Binding(get: { TriggerKind(rule.trigger) }, set: { rule.trigger = $0.initial })) {
+                                ForEach(TriggerKind.allCases) { Text(model.t($0.rawValue)).tag($0) }
+                            }
+                            Divider().padding(.vertical, 4)
+                            triggerEditor
+                        }
+                        mappingCard(number: "2", title: model.mappingText("What should it do?", "执行什么？")) {
+                            QuickActionEditor(action: firstAction)
                         }
                     }
-                }
-            }.formStyle(.grouped)
+                    CompactApplicationScopeEditor(scope: $rule.scope)
+                        .padding(14).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+                    DisclosureGroup(isExpanded: $advanced) {
+                        advancedEditor.padding(.top, 12)
+                    } label: {
+                        HStack {
+                            Text(model.mappingText("Advanced", "高级设置")).font(.subheadline.weight(.medium))
+                            Text(model.mappingText("Multi-click · modifiers · priority · more actions", "连击 · 修饰键 · 优先级 · 更多动作")).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }.padding(.horizontal, 4)
+                    if !issues.isEmpty {
+                        VStack(alignment: .leading, spacing: 5) {
+                            ForEach(Array(issues.enumerated()), id: \.offset) { _, issue in
+                                Label(issue.message, systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.orange)
+                            }
+                        }
+                    }
+                }.padding(24)
+            }.background(Color(nsColor: .windowBackgroundColor))
             Divider()
             HStack {
+                Text(model.mappingText("Changes apply when you save.", "保存后生效。")).font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button(model.t("Cancel")) { dismiss() }.keyboardShortcut(.cancelAction)
-                Button(model.t("Save")) { if onSave(rule) { dismiss() } }
-                    .keyboardShortcut(.defaultAction).disabled(!issues.isEmpty)
-            }.padding(18)
-        }.frame(minWidth: 650, idealWidth: 700, minHeight: 650, idealHeight: 780)
+                Button(model.t("Save")) {
+                    if rule.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || rule.name == "New rule" || rule.name == "新规则" {
+                        rule.name = MappingLabels.trigger(rule.trigger, model: model) + " → " + MappingLabels.action(rule.actions.first, model: model)
+                    }
+                    if onSave(rule) { dismiss() }
+                }.keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent).disabled(!issues.isEmpty || model.activeShortcutRecorder != nil)
+            }.padding(.horizontal, 24).padding(.vertical, 16)
+        }.frame(minWidth: 900, idealWidth: 980, minHeight: 690, idealHeight: 740)
+    }
+
+    private func mappingCard<Content: View>(number: String, title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 9) {
+                Text(number).font(.caption.bold()).foregroundStyle(.white).frame(width: 24, height: 24).background(Color.accentColor, in: Circle())
+                Text(title).font(.headline)
+            }
+            content()
+            Spacer(minLength: 0)
+        }.frame(maxWidth: .infinity, minHeight: 260, alignment: .topLeading).padding(18)
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.secondary.opacity(0.12)))
+    }
+
+    @ViewBuilder private var advancedEditor: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            TextField(model.t("Name"), text: $rule.name)
+            if case .mouseButton = rule.trigger {
+                Stepper("\(model.t("Clicks")): \(mouseBinding.wrappedValue.clickCount)", value: mouseBinding.clickCount, in: 1...3)
+            }
+            ModifiersEditor(value: triggerModifiers)
+            Stepper("\(model.t("Priority")): \(rule.priority)", value: $rule.priority, in: -1000...1000)
+            Text(model.t("Application-specific rules run first, then higher priority, then saved order. Only the first match runs.")).font(.caption).foregroundStyle(.secondary)
+            Divider()
+            DisclosureGroup(model.mappingText("Full action options", "完整动作选项")) { ActionEditor(action: firstAction).padding(.vertical, 8) }
+            ForEach(Array(rule.actions.indices.dropFirst()), id: \.self) { index in
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Text("\(model.t("Action")) \(index + 1)").font(.headline)
+                        Spacer()
+                        Button { rule.actions.swapAt(index, index - 1) } label: { Image(systemName: "arrow.up") }
+                        Button { rule.actions.swapAt(index, index + 1) } label: { Image(systemName: "arrow.down") }.disabled(index == rule.actions.count - 1)
+                        Button(role: .destructive) { rule.actions.remove(at: index) } label: { Image(systemName: "trash") }
+                    }
+                    ActionEditor(action: Binding(get: { rule.actions.indices.contains(index) ? rule.actions[index] : .system(.missionControl) }, set: { if rule.actions.indices.contains(index) { rule.actions[index] = $0 } }))
+                }.padding(12).background(Color.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
+            }
+            Button { rule.actions.append(.shortcut(FlowGestureCore.KeyboardShortcut(keyCode: 8, modifiers: .command))) } label: { Label(model.t("Add action"), systemImage: "plus") }
+            Divider()
+            DisclosureGroup(model.mappingText("Application IDs and exclusions", "应用标识符与排除列表")) { ApplicationScopeEditor(scope: $rule.scope).padding(.vertical, 8) }
+        }.textFieldStyle(.roundedBorder)
+    }
+    private var mouseBinding: Binding<MouseButtonTrigger> {
+        caseBinding($rule.trigger, fallback: MouseButtonTrigger(), extract: { if case .mouseButton(let value) = $0 { return value }; return nil }, embed: InputTrigger.mouseButton)
+    }
+    private var triggerModifiers: Binding<ModifierKeys> {
+        Binding(get: {
+            switch rule.trigger {
+            case .mouseButton(let v): return v.modifiers
+            case .draw(let v): return v.modifiers
+            case .shape(let v): return v.modifiers
+            case .keyboard(let v): return v.modifiers
+            case .touch(let v): return v.modifiers
+            case .screenCorner(let v): return v.modifiers
+            }
+        }, set: { modifiers in
+            switch rule.trigger {
+            case .mouseButton(var v): v.modifiers = modifiers; rule.trigger = .mouseButton(v)
+            case .draw(var v): v.modifiers = modifiers; rule.trigger = .draw(v)
+            case .shape(var v): v.modifiers = modifiers; rule.trigger = .shape(v)
+            case .keyboard(var v): v.modifiers = modifiers; rule.trigger = .keyboard(v)
+            case .touch(var v): v.modifiers = modifiers; rule.trigger = .touch(v)
+            case .screenCorner(var v): v.modifiers = modifiers; rule.trigger = .screenCorner(v)
+            }
+        })
     }
 
     @ViewBuilder private var triggerEditor: some View {
         switch rule.trigger {
-        case .mouseButton:
-            MouseTriggerEditor(value: caseBinding($rule.trigger, fallback: MouseButtonTrigger(), extract: { if case .mouseButton(let value) = $0 { return value }; return nil }, embed: InputTrigger.mouseButton))
-        case .draw:
-            DrawTriggerEditor(value: caseBinding($rule.trigger, fallback: DrawGestureTrigger(), extract: { if case .draw(let value) = $0 { return value }; return nil }, embed: InputTrigger.draw))
-        case .shape:
-            ShapeTriggerEditor(value: caseBinding($rule.trigger, fallback: ShapeGestureTrigger(), extract: { if case .shape(let value) = $0 { return value }; return nil }, embed: InputTrigger.shape))
-        case .keyboard:
-            ShortcutEditor(value: caseBinding($rule.trigger, fallback: FlowGestureCore.KeyboardShortcut(), extract: { if case .keyboard(let value) = $0 { return value }; return nil }, embed: InputTrigger.keyboard))
-        case .touch:
-            TouchTriggerEditor(value: caseBinding($rule.trigger, fallback: TouchGestureTrigger(), extract: { if case .touch(let value) = $0 { return value }; return nil }, embed: InputTrigger.touch))
-        case .screenCorner:
-            CornerTriggerEditor(value: caseBinding($rule.trigger, fallback: ScreenCornerTrigger(), extract: { if case .screenCorner(let value) = $0 { return value }; return nil }, embed: InputTrigger.screenCorner))
+        case .mouseButton: MouseTriggerEditor(value: mouseBinding)
+        case .draw: DrawTriggerEditor(value: caseBinding($rule.trigger, fallback: DrawGestureTrigger(), extract: { if case .draw(let value) = $0 { return value }; return nil }, embed: InputTrigger.draw))
+        case .shape: ShapeTriggerEditor(value: caseBinding($rule.trigger, fallback: ShapeGestureTrigger(), extract: { if case .shape(let value) = $0 { return value }; return nil }, embed: InputTrigger.shape))
+        case .keyboard: ShortcutEditor(value: caseBinding($rule.trigger, fallback: FlowGestureCore.KeyboardShortcut(), extract: { if case .keyboard(let value) = $0 { return value }; return nil }, embed: InputTrigger.keyboard))
+        case .touch: TouchTriggerEditor(value: caseBinding($rule.trigger, fallback: TouchGestureTrigger(), extract: { if case .touch(let value) = $0 { return value }; return nil }, embed: InputTrigger.touch))
+        case .screenCorner: CornerTriggerEditor(value: caseBinding($rule.trigger, fallback: ScreenCornerTrigger(), extract: { if case .screenCorner(let value) = $0 { return value }; return nil }, embed: InputTrigger.screenCorner))
         }
     }
 }
@@ -140,12 +213,52 @@ private struct ModifiersEditor: View {
 private struct MouseTriggerEditor: View {
     @EnvironmentObject private var model: AppModel
     @Binding var value: MouseButtonTrigger
+    @State private var recording = false
+    @State private var recorderID = UUID()
+    @State private var feedback: String?
     var body: some View {
-        Picker(model.t("Button"), selection: $value.button) {
-            ForEach(MouseButton.allCases, id: \.self) { Text(model.t(L10n.mouse($0))).tag($0) }
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 16) {
+                MouseButtonVisual(button: value.button)
+                VStack(alignment: .leading, spacing: 7) {
+                    Text(MappingLabels.mouse(value.button, model: model)).font(.title3.bold())
+                    Text(model.mappingText("Mouse button \(value.button.rawValue + 1)", "鼠标按钮 \(value.button.rawValue + 1)")).font(.caption).foregroundStyle(.secondary)
+                    Text(value.button == .middle ? model.mappingText("Press the wheel — not scrolling.", "按下滚轮，不是滚动滚轮。") : model.mappingText("Side-button positions vary. Record the actual button below.", "侧键位置因设备而异，请录制你实际按下的键。")).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            if recording {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 9).fill(Color.accentColor.opacity(0.08))
+                    Text(model.mappingText("Press your mouse button HERE", "在此区域按下要映射的鼠标键")).font(.callout.weight(.medium)).foregroundStyle(Color.accentColor).multilineTextAlignment(.center).padding(12)
+                    MouseButtonCaptureSurface { number, _ in
+                        if let button = MouseButton(rawValue: number) {
+                            value.button = button
+                            feedback = model.mappingText("Recorded actual button \(number + 1)", "已录制实际按钮 \(number + 1)")
+                        } else { feedback = model.mappingText("Button \(number + 1) is not supported yet (1–8 supported).", "暂不支持按钮 \(number + 1)（目前支持 1–8）。") }
+                        stopRecording()
+                    }
+                }.frame(height: 64).overlay(RoundedRectangle(cornerRadius: 9).stroke(Color.accentColor, style: StrokeStyle(lineWidth: 1, dash: [4])))
+            }
+            HStack {
+                Button(recording ? model.mappingText("Cancel recording", "取消录制") : model.mappingText("Record mouse button", "录制鼠标按键")) {
+                    if recording { stopRecording() }
+                    else { recording = true; feedback = nil; model.beginShortcutRecording(id: recorderID) }
+                }.buttonStyle(.borderedProminent)
+                Menu(model.mappingText("Choose manually", "手动选择")) {
+                    ForEach(MouseButton.allCases, id: \.self) { button in
+                        Button(MappingLabels.mouse(button, model: model)) { value.button = button; stopRecording() }
+                    }
+                }.fixedSize()
+            }
+            if let feedback { Text(feedback).font(.caption).foregroundStyle(.secondary) }
         }
-        Stepper("\(model.t("Clicks")): \(value.clickCount)", value: $value.clickCount, in: 1...3)
-        ModifiersEditor(value: $value.modifiers)
+        .onDisappear { stopRecording() }
+        .onChange(of: model.activeShortcutRecorder) { if $0 != recorderID && recording { stopRecording() } }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in stopRecording() }
+    }
+    private func stopRecording() {
+        if recording { model.endShortcutRecording(id: recorderID) }
+        recording = false
     }
 }
 
@@ -156,7 +269,6 @@ private struct DrawTriggerEditor: View {
         Picker(model.t("Button"), selection: $value.button) {
             ForEach(MouseButton.allCases, id: \.self) { Text(model.t(L10n.mouse($0))).tag($0) }
         }
-        ModifiersEditor(value: $value.modifiers)
         VStack(alignment: .leading, spacing: 10) {
             Text(model.t("Direction sequence"))
             Text(value.directions.map(L10n.arrow).joined(separator: "  "))
@@ -189,7 +301,6 @@ private struct ShapeTriggerEditor: View {
         Picker(model.t("Button"), selection: $value.button) {
             ForEach(MouseButton.allCases, id: \.self) { Text(model.t(L10n.mouse($0))).tag($0) }
         }
-        ModifiersEditor(value: $value.modifiers)
         VStack(alignment: .leading, spacing: 10) {
             GeometryReader { geometry in
                 ZStack {
@@ -285,21 +396,33 @@ private struct ShapeTriggerEditor: View {
 private struct ShortcutEditor: View {
     @EnvironmentObject private var model: AppModel
     @Binding var value: FlowGestureCore.KeyboardShortcut
+    var showManualOptions = true
     @State private var monitor: Any?
     @State private var recording = false
     @State private var recorderID = UUID()
     var body: some View {
-        HStack {
-            TextField(model.t("Key code"), value: Binding(get: { Int(value.keyCode) }, set: { value.keyCode = UInt16(clamping: $0) }), format: .number)
-                .frame(maxWidth: 200)
-            Spacer()
-            Button(model.t(recording ? "Recording… press a key" : "Record shortcut")) { recording ? stopRecording() : startRecording() }
+        VStack(alignment: .leading, spacing: 12) {
+            Text(recording ? model.mappingText("Press your shortcut…", "请按下完整快捷键…") : MappingLabels.shortcut(value))
+                .font(.system(size: recording ? 22 : 42, weight: .semibold, design: .rounded))
+                .foregroundStyle(recording ? Color.accentColor : Color.primary)
+                .frame(maxWidth: .infinity, minHeight: 84)
+                .background(Color.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
+            Button(recording ? model.mappingText("Cancel recording", "取消录制") : model.mappingText("Record keyboard shortcut", "录制完整快捷键")) {
+                recording ? stopRecording() : startRecording()
+            }.buttonStyle(.borderedProminent)
+            Text(model.mappingText("Press all keys together, such as ⌘C. Esc cancels.", "一起按下完整组合，例如 ⌘C。Esc 取消。")).font(.caption).foregroundStyle(.secondary)
+            if showManualOptions {
+                DisclosureGroup(model.mappingText("Manual key and modifiers", "手动键码与修饰键")) {
+                    VStack(spacing: 10) {
+                        TextField(model.t("Key code"), value: Binding(get: { Int(value.keyCode) }, set: { value.keyCode = UInt16(clamping: $0) }), format: .number).textFieldStyle(.roundedBorder)
+                        ModifiersEditor(value: $value.modifiers)
+                    }.padding(.top, 8)
+                }.font(.caption)
+            }
         }
-        ModifiersEditor(value: $value.modifiers)
-        Text(model.t("Key codes are macOS virtual key codes. Use Record shortcut to capture the key and modifiers.")).font(.caption).foregroundStyle(.secondary)
-            .onDisappear { stopRecording() }
-            .onChange(of: model.activeShortcutRecorder) { if $0 != recorderID && recording { stopRecording() } }
-            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in stopRecording() }
+        .onDisappear { stopRecording() }
+        .onChange(of: model.activeShortcutRecorder) { if $0 != recorderID && recording { stopRecording() } }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in stopRecording() }
     }
     private func startRecording() {
         stopRecording()
@@ -360,7 +483,6 @@ private struct TouchTriggerEditor: View {
                 Text(model.t("Outward")).tag(PinchDirection.outward)
             }
         }
-        ModifiersEditor(value: $value.modifiers)
         Text(model.t("Touch support depends on the connected device and macOS. Check Diagnostics for the actual backend status.")).font(.caption).foregroundStyle(.secondary)
         Text(model.t("This build does not suppress macOS gestures. Disable an overlapping system gesture before testing the same custom gesture, otherwise both may run.")).font(.caption).foregroundStyle(.orange)
     }
@@ -373,7 +495,6 @@ private struct CornerTriggerEditor: View {
         Picker(model.t("Corner"), selection: $value.corner) {
             ForEach(ScreenCorner.allCases, id: \.self) { Text(model.t(L10n.corner($0))).tag($0) }
         }
-        ModifiersEditor(value: $value.modifiers)
         Text(model.t("Move the pointer into the selected screen corner. Add modifiers to avoid accidental triggers.")).font(.caption).foregroundStyle(.secondary)
     }
 }
@@ -450,6 +571,65 @@ private enum ActionKind: String, CaseIterable, Identifiable {
         case .frame: return .windowFrame(x: 0.1, y: 0.1, width: 0.8, height: 0.8)
         case .system: return .system(.missionControl)
         }
+    }
+}
+
+private struct QuickActionEditor: View {
+    @EnvironmentObject private var model: AppModel
+    @Binding var action: Action
+    private var preset: String {
+        switch action {
+        case .shortcut(let shortcut):
+            if shortcut.modifiers == .command {
+                switch shortcut.keyCode { case 8: return "copy"; case 9: return "paste"; case 33: return "back"; case 30: return "forward"; default: break }
+            }
+            return "shortcut"
+        case .window: return "window"
+        case .openApplication: return "app"
+        default: return "more"
+        }
+    }
+    var body: some View {
+        Picker(model.mappingText("Behavior", "动作"), selection: Binding(get: { preset }, set: setPreset)) {
+            Text(model.mappingText("Copy", "复制")).tag("copy")
+            Text(model.mappingText("Paste", "粘贴")).tag("paste")
+            Text(model.mappingText("Back", "后退")).tag("back")
+            Text(model.mappingText("Forward", "前进")).tag("forward")
+            Text(model.mappingText("Keyboard shortcut", "自定义快捷键")).tag("shortcut")
+            Text(model.mappingText("Move / resize window", "移动 / 调整窗口")).tag("window")
+            Text(model.mappingText("Open an app", "打开应用")).tag("app")
+            Text(model.mappingText("More actions…", "更多动作…")).tag("more")
+        }
+        Divider().padding(.vertical, 4)
+        switch action {
+        case .shortcut:
+            ShortcutEditor(value: caseBinding($action, fallback: FlowGestureCore.KeyboardShortcut(keyCode: 8, modifiers: .command), extract: { if case .shortcut(let value) = $0 { return value }; return nil }, embed: Action.shortcut), showManualOptions: false)
+        case .window:
+            Image(systemName: "macwindow").font(.system(size: 46)).foregroundStyle(Color.accentColor).frame(maxWidth: .infinity).padding(.vertical, 10)
+            Picker(model.t("Window"), selection: caseBinding($action, fallback: WindowAction.maximize, extract: { if case .window(let value) = $0 { return value }; return nil }, embed: Action.window)) {
+                ForEach(WindowAction.allCases, id: \.self) { Text(model.t(L10n.window($0))).tag($0) }
+            }
+        case .openApplication(let identifier):
+            Image(systemName: "app.badge").font(.system(size: 42)).foregroundStyle(Color.accentColor).frame(maxWidth: .infinity).padding(.vertical, 10)
+            Text(appName(identifier)).font(.headline).frame(maxWidth: .infinity)
+            Button(model.t("Choose application…")) { if let app = model.chooseApplication() { action = .openApplication(app) } }.buttonStyle(.borderedProminent)
+        default: ActionEditor(action: $action)
+        }
+    }
+    private func setPreset(_ value: String) {
+        switch value {
+        case "copy", "shortcut": action = .shortcut(FlowGestureCore.KeyboardShortcut(keyCode: 8, modifiers: .command))
+        case "paste": action = .shortcut(FlowGestureCore.KeyboardShortcut(keyCode: 9, modifiers: .command))
+        case "back": action = .shortcut(FlowGestureCore.KeyboardShortcut(keyCode: 33, modifiers: .command))
+        case "forward": action = .shortcut(FlowGestureCore.KeyboardShortcut(keyCode: 30, modifiers: .command))
+        case "window": action = .window(.maximize)
+        case "app": action = .openApplication("com.apple.finder")
+        default: action = .system(.missionControl)
+        }
+    }
+    private func appName(_ identifier: String) -> String {
+        let url = identifier.hasPrefix("/") ? URL(fileURLWithPath: identifier) : NSWorkspace.shared.urlForApplication(withBundleIdentifier: identifier)
+        return url.map { FileManager.default.displayName(atPath: $0.path).replacingOccurrences(of: ".app", with: "") } ?? identifier
     }
 }
 
