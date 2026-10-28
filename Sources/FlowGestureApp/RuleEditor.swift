@@ -22,7 +22,7 @@ struct RuleEditor: View {
                 Section {
                     TextField(model.t("Name"), text: $rule.name)
                     Stepper("\(model.t("Priority")): \(rule.priority)", value: $rule.priority, in: -1000...1000)
-                    Text(model.t("Higher priorities run first; only the first matching rule runs.")).font(.caption).foregroundStyle(.secondary)
+                    Text(model.t("Application-specific rules run first, then higher priority, then saved order. Only the first match runs.")).font(.caption).foregroundStyle(.secondary)
                 }
                 Section(model.t("Trigger")) {
                     Picker(model.t("Trigger"), selection: Binding(get: { TriggerKind(rule.trigger) }, set: { rule.trigger = $0.initial })) {
@@ -79,6 +79,8 @@ struct RuleEditor: View {
             MouseTriggerEditor(value: caseBinding($rule.trigger, fallback: MouseButtonTrigger(), extract: { if case .mouseButton(let value) = $0 { return value }; return nil }, embed: InputTrigger.mouseButton))
         case .draw:
             DrawTriggerEditor(value: caseBinding($rule.trigger, fallback: DrawGestureTrigger(), extract: { if case .draw(let value) = $0 { return value }; return nil }, embed: InputTrigger.draw))
+        case .shape:
+            ShapeTriggerEditor(value: caseBinding($rule.trigger, fallback: ShapeGestureTrigger(), extract: { if case .shape(let value) = $0 { return value }; return nil }, embed: InputTrigger.shape))
         case .keyboard:
             ShortcutEditor(value: caseBinding($rule.trigger, fallback: FlowGestureCore.KeyboardShortcut(), extract: { if case .keyboard(let value) = $0 { return value }; return nil }, embed: InputTrigger.keyboard))
         case .touch:
@@ -90,12 +92,13 @@ struct RuleEditor: View {
 }
 
 private enum TriggerKind: String, CaseIterable, Identifiable {
-    case mouse = "Mouse button", draw = "Draw gesture", keyboard = "Keyboard shortcut", touch = "Touch gesture", corner = "Screen corner"
+    case mouse = "Mouse button", draw = "Draw gesture", shape = "Free-form shape", keyboard = "Keyboard shortcut", touch = "Touch gesture", corner = "Screen corner"
     var id: String { rawValue }
     init(_ trigger: InputTrigger) {
         switch trigger {
         case .mouseButton: self = .mouse
         case .draw: self = .draw
+        case .shape: self = .shape
         case .keyboard: self = .keyboard
         case .touch: self = .touch
         case .screenCorner: self = .corner
@@ -105,6 +108,7 @@ private enum TriggerKind: String, CaseIterable, Identifiable {
         switch self {
         case .mouse: return .mouseButton(MouseButtonTrigger())
         case .draw: return .draw(DrawGestureTrigger())
+        case .shape: return .shape(ShapeGestureTrigger())
         case .keyboard: return .keyboard(FlowGestureCore.KeyboardShortcut(keyCode: 0, modifiers: [.command, .shift]))
         case .touch: return .touch(TouchGestureTrigger())
         case .corner: return .screenCorner(ScreenCornerTrigger())
@@ -172,6 +176,112 @@ private struct DrawTriggerEditor: View {
     }
 }
 
+private struct ShapeTriggerEditor: View {
+    @EnvironmentObject private var model: AppModel
+    @Binding var value: ShapeGestureTrigger
+    @State private var recorderID = UUID()
+    @State private var recording = false
+    @State private var testing = false
+    @State private var stroke: [GesturePoint] = []
+    @State private var feedback: String?
+
+    var body: some View {
+        Picker(model.t("Button"), selection: $value.button) {
+            ForEach(MouseButton.allCases, id: \.self) { Text(model.t(L10n.mouse($0))).tag($0) }
+        }
+        ModifiersEditor(value: $value.modifiers)
+        VStack(alignment: .leading, spacing: 10) {
+            GeometryReader { geometry in
+                ZStack {
+                    RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .textBackgroundColor))
+                    Canvas { context, size in
+                        let points = recording && !stroke.isEmpty ? stroke : previewPoints(in: size)
+                        guard let first = points.first else { return }
+                        var path = Path()
+                        path.move(to: CGPoint(x: first.x, y: Double(size.height) - first.y))
+                        for point in points.dropFirst() { path.addLine(to: CGPoint(x: point.x, y: Double(size.height) - point.y)) }
+                        context.stroke(path, with: .color(recording ? .orange : .accentColor), style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+                        let start = CGRect(x: first.x - 5, y: Double(size.height) - first.y - 5, width: 10, height: 10)
+                        context.fill(Path(ellipseIn: start), with: .color(.green))
+                    }
+                    if !recording && value.points.isEmpty {
+                        Text(model.t("Record a shape, then draw one continuous stroke here.")).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center).padding()
+                    }
+                    if recording && stroke.isEmpty {
+                        Text(model.t("Draw with the left mouse button inside this canvas.")).font(.callout).foregroundStyle(.orange).multilineTextAlignment(.center).padding()
+                    }
+                }
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(recording ? Color.orange : Color.secondary.opacity(0.3), lineWidth: recording ? 2 : 1))
+                .contentShape(Rectangle())
+                .gesture(DragGesture(minimumDistance: 0).onChanged { event in
+                    guard recording else { return }
+                    let point = GesturePoint(x: min(max(0, Double(event.location.x)), Double(geometry.size.width)),
+                                             y: Double(geometry.size.height) - min(max(0, Double(event.location.y)), Double(geometry.size.height)))
+                    if stroke.count < ShapeGestureRecognizer.maximumInputPoints { stroke.append(point) }
+                    else { feedback = model.t("Stroke too long. Record a shorter shape."); stopRecording() }
+                }.onEnded { _ in if recording { finishStroke() } })
+            }.frame(height: 190)
+            HStack {
+                Button(model.t(recording ? "Cancel recording" : "Record shape")) {
+                    if recording { stopRecording() } else { startRecording(test: false) }
+                }
+                Button(model.t("Test drawing")) { startRecording(test: true) }.disabled(value.points.isEmpty || recording)
+                Button(model.t("Clear")) { stopRecording(); value.points = []; feedback = nil }.disabled(value.points.isEmpty && !recording)
+                Spacer()
+                Text("\(value.points.count) \(model.t("points"))").font(.caption).foregroundStyle(.secondary)
+            }
+            HStack {
+                Text(model.t("Minimum similarity"))
+                Slider(value: Binding(get: { 1 - value.tolerance }, set: { value.tolerance = 1 - $0 }), in: 0.6...0.97, step: 0.01)
+                Text("\(Int(((1 - value.tolerance) * 100).rounded()))%").monospacedDigit().frame(width: 44, alignment: .trailing)
+            }
+            if let feedback { Text(feedback).font(.caption).foregroundStyle(.secondary) }
+            Text(model.t("Size and position may vary. Keep the same orientation, starting point, and drawing direction. Green marks the start.")).font(.caption).foregroundStyle(.secondary)
+        }
+        .onDisappear { stopRecording() }
+        .onChange(of: model.activeShortcutRecorder) { if $0 != recorderID && recording { stopRecording() } }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in stopRecording() }
+    }
+
+    private func previewPoints(in size: CGSize) -> [GesturePoint] {
+        let scale = max(1, min(Double(size.width), Double(size.height)) - 38)
+        return ShapeGestureRecognizer.normalizedPath(value.points).map {
+            GesturePoint(x: Double(size.width) / 2 + $0.x * scale, y: Double(size.height) / 2 + $0.y * scale)
+        }
+    }
+    private func startRecording(test: Bool) {
+        stopRecording()
+        testing = test
+        stroke = []
+        feedback = nil
+        recording = true
+        model.beginShortcutRecording(id: recorderID)
+    }
+    private func stopRecording() {
+        if recording { model.endShortcutRecording(id: recorderID) }
+        recording = false
+        stroke = []
+    }
+    private func finishStroke() {
+        let candidate = stroke
+        let wasTesting = testing
+        stopRecording()
+        guard let extent = ShapeGestureRecognizer.strokeExtent(candidate), extent >= 16,
+              !ShapeGestureRecognizer.normalizedPath(candidate).isEmpty else {
+            feedback = model.t("Draw a larger shape; clicks and tiny strokes are ignored.")
+            return
+        }
+        if wasTesting {
+            let score = ShapeGestureRecognizer().similarity(candidate, to: value.points) ?? 0
+            let matched = ShapeGestureRecognizer().matches(candidate, template: value.points, tolerance: value.tolerance)
+            feedback = "\(Int((score * 100).rounded()))% · \(model.t(matched ? "Matched" : "Not matched"))"
+        } else {
+            value.points = ShapeGestureRecognizer.normalizedPath(candidate)
+            feedback = model.t("Shape recorded. Hold the selected trigger button to draw it outside this editor.")
+        }
+    }
+}
+
 private struct ShortcutEditor: View {
     @EnvironmentObject private var model: AppModel
     @Binding var value: FlowGestureCore.KeyboardShortcut
@@ -230,6 +340,11 @@ private struct TouchTriggerEditor: View {
         })
     }
     var body: some View {
+        Picker(model.t("Touch device"), selection: $value.device) {
+            Text(model.t("Any touch device")).tag(TouchDeviceScope.any)
+            Text(model.t("Trackpad")).tag(TouchDeviceScope.trackpad)
+            Text(model.t("Mouse touch surface")).tag(TouchDeviceScope.mouse)
+        }
         Picker(model.t("Gesture"), selection: Binding(get: { kind }, set: {
             switch $0 { case "Swipe": value.gesture = .swipe(fingers: 3, direction: .left); case "Pinch": value.gesture = .pinch(.inward); default: value.gesture = .tap(fingers: 3) }
         })) { ForEach(["Tap", "Swipe", "Pinch"], id: \.self) { Text(model.t($0)).tag($0) } }
@@ -247,6 +362,7 @@ private struct TouchTriggerEditor: View {
         }
         ModifiersEditor(value: $value.modifiers)
         Text(model.t("Touch support depends on the connected device and macOS. Check Diagnostics for the actual backend status.")).font(.caption).foregroundStyle(.secondary)
+        Text(model.t("This build does not suppress macOS gestures. Disable an overlapping system gesture before testing the same custom gesture, otherwise both may run.")).font(.caption).foregroundStyle(.orange)
     }
 }
 

@@ -73,8 +73,13 @@ private struct RulesPane: View {
     @State private var editingRule: Rule?
     @State private var deletingRule: Rule?
     private var rules: [Rule] {
-        model.book.rules.filter { search.isEmpty || $0.name.localizedCaseInsensitiveContains(search) || model.triggerTitle($0.trigger).localizedCaseInsensitiveContains(search) }
-            .sorted { $0.priority == $1.priority ? ($0.name.localizedStandardCompare($1.name) == .orderedAscending) : $0.priority > $1.priority }
+        model.book.rules.enumerated()
+            .filter { search.isEmpty || $0.element.name.localizedCaseInsensitiveContains(search) || model.triggerTitle($0.element.trigger).localizedCaseInsensitiveContains(search) }
+            .sorted {
+                if $0.element.scope.isGlobal != $1.element.scope.isGlobal { return !$0.element.scope.isGlobal }
+                if $0.element.priority != $1.element.priority { return $0.element.priority > $1.element.priority }
+                return $0.offset < $1.offset
+            }.map(\.element)
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {

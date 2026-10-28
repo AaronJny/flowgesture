@@ -1,50 +1,57 @@
-# FlowGesture · 行云手势
+# FlowGesture
 
-Native macOS input customization. 原生 macOS 鼠标、触控板与快捷操作工具。
+[English](README.md) | [简体中文](README.zh-CN.md)
 
-A new independent implementation, not a modified BAB binary. No account, subscription,
-mandatory updater, telemetry or remote rule execution. Private development build;
-feature parity and real-device validation are work in progress.
+A native macOS menu-bar app for mouse gestures, scrolling, touch gestures and everyday automation.
 
-## Build / 构建
+**Development preview:** the app builds and launches, but real-device acceptance testing is still in progress. This is an independent implementation, not a modified BAB binary. It has no account requirement, subscription, mandatory updater or telemetry.
 
-Requires macOS 13+, Xcode command-line tools / Swift 5.9+.
+## Features
+
+- Draw gestures with mouse buttons, with a visible trail and replay of unmatched clicks.
+- Map side buttons and keyboard shortcuts; trigger actions from screen corners.
+- Reverse mouse scrolling independently, adjust speed and smooth discrete wheel input. Device identity keeps trackpads unchanged by default; unidentified sources are left untouched.
+- Recognize multi-finger taps, swipes and pinches from supported touch devices, including trackpads and touch mice.
+- Choose global or per-app rules, modifier keys, priorities and excluded apps.
+- Run shortcuts and AppleScript, open URLs/files/apps, select menu items, arrange windows and perform media/system actions.
+- Edit rules in English or Chinese; import/export JSON, restore backups and synchronize through a folder you choose.
+
+Touch-device compatibility and interference with macOS's own gestures still need hardware verification. Not every BAB gesture/action is implemented yet; see the [acceptance matrix](docs/ACCEPTANCE.md) for the remaining scope.
+
+## Install and use
+
+Requires **macOS 13 or later**. Development builds contain both Apple Silicon and Intel executables.
+
+1. Open a successful [GitHub Actions run](https://github.com/AaronJny/flowgesture/actions), download the `FlowGesture-macos` artifact, and extract its ZIP files.
+2. Move `FlowGesture.app` to Applications and open it. Development builds are ad-hoc signed, not notarized; macOS may ask you to confirm opening the app in Privacy & Security.
+3. Open **FlowGesture Settings** from the menu bar. Grant **Accessibility** and **Input Monitoring** in System Settings → Privacy & Security, then refresh permissions or reopen the app.
+4. Click **Add examples** or **Add rule**, choose a trigger and its actions, and enable FlowGesture. The touch example is initially disabled so you can choose how it interacts with your system gestures.
+
+AppleScript controlling another app can separately request Automation permission. Pause monitoring from the menu bar whenever needed. There is no forced update mechanism.
+
+## Configuration and sync
+
+Rules live in `~/Library/Application Support/FlowGesture/rules.json`. Import and export use JSON; a previous configuration is backed up before replacement. Imported or incoming synchronized rules are paused for review before execution.
+
+For synchronization, select an iCloud Drive or another synchronized folder in Settings. FlowGesture checks that folder while it is running, detects conflicting edits, and lets you choose which version to keep. It does not run after you quit, create a cloud account, or silently overwrite a conflict.
+
+## Build from source
+
+Install Xcode command-line tools and Swift 5.9 or later on macOS:
 
 ```sh
 swift test
+bash scripts/test-native-bridge.sh
 bash scripts/build-app.sh
 open build/FlowGesture.app
 ```
 
-Grant **Accessibility** and **Input Monitoring** in System Settings → Privacy & Security.
-Then reopen the app or press Resume. AppleScript controlling other apps may separately
-request Automation permission. Local bundles are ad-hoc signed, not notarized.
+The build script creates a universal app and `build/FlowGesture-macos.zip`.
 
-The menu-bar app opens bilingual settings. Add a rule, select its trigger and actions,
-optionally scope it to application bundle identifiers, then enable monitoring. Rules are
-stored at `~/Library/Application Support/FlowGesture/rules.json`. Import/export uses JSON;
-folder sync supports a user-selected iCloud Drive or other synced folder, detects conflicts,
-and does not require an account or change cloud entitlements.
+## Project structure
 
-## Implemented paths / 已实现链路
+- `FlowGestureCore`: rule models, validation, matching and deterministic gesture recognition.
+- `FlowGestureNative`: optional system touch capture and device identity, with explicit unavailable states.
+- `FlowGestureApp`: SwiftUI settings, event handling, lifecycle and queued actions.
 
-- Mouse-button mappings and directional right-button drawings with unmatched-click replay.
-- Mouse scroll inversion, speed and smoothing; trackpad input must be left untouched by default.
-- Keyboard shortcut and screen-corner triggers; per-app/global rules, modifiers and exclusions.
-- Touch contact capture + tap/swipe/pinch recognizers, with per-device session state.
-- Shortcuts, AppleScript, URL/file/app opening, accessibility menus and window layouts,
-  media/system actions and action sequences.
-- Editable rules, bilingual UI, atomic persistence, backup, import/export and folder sync.
-
-See [acceptance matrix](docs/ACCEPTANCE.md) for the difference between implemented,
-CI-checked and hardware-verified. Touch capture uses optional dynamically resolved system
-interfaces; availability, gesture arbitration and device identity require real-Mac testing.
-Missing capability is reported rather than represented as a working feature.
-
-## Architecture / 架构
-
-`FlowGestureCore` contains pure value models, validation, matching and deterministic
-recognizers. `FlowGestureNative` owns the system contact ABI boundary and device identity.
-`FlowGestureApp` owns SwiftUI settings, a short-running event tap, queued action execution,
-and lifecycle. Synthetic events are tagged to prevent feedback loops. No third-party code
-or binary is bundled. Original source; license will be selected before public release.
+No third-party implementation or binary is bundled. A distribution license will be selected before the project is made public. Implementation and hardware-validation details are in [touch/device notes](docs/touch-device-validation.md).

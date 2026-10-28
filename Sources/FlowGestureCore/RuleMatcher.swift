@@ -9,13 +9,26 @@ public enum RuleMatcher {
         // An unidentified foreground app cannot be proved safe against global exclusions.
         if bundleIdentifier == nil && !excludedBundleIdentifiers.isEmpty { return [] }
         return rules.enumerated()
-            .filter { $0.element.isEnabled && $0.element.trigger == trigger && $0.element.scope.includes(bundleIdentifier) }
+            .filter { $0.element.isEnabled && triggersMatch(trigger, template: $0.element.trigger) && $0.element.scope.includes(bundleIdentifier) }
             .sorted { lhs, rhs in
                 if lhs.element.scope.isGlobal != rhs.element.scope.isGlobal { return !lhs.element.scope.isGlobal }
                 if lhs.element.priority != rhs.element.priority { return lhs.element.priority > rhs.element.priority }
                 return lhs.offset < rhs.offset
             }
             .map(\.element)
+    }
+
+    /// Candidate events may carry raw geometry; templates carry matching criteria.
+    public static func triggersMatch(_ candidate: InputTrigger, template: InputTrigger) -> Bool {
+        switch (candidate, template) {
+        case let (.touch(candidate), .touch(template)):
+            return candidate.gesture == template.gesture && candidate.modifiers == template.modifiers
+                && (template.device == .any || template.device == candidate.device)
+        case let (.shape(candidate), .shape(template)):
+            return candidate.button == template.button && candidate.modifiers == template.modifiers
+                && ShapeGestureRecognizer().matches(candidate.points, template: template.points, tolerance: template.tolerance)
+        default: return candidate == template
+        }
     }
 
     public static func bestMatch(for trigger: InputTrigger, in bundleIdentifier: String?, rules: [Rule],
@@ -69,6 +82,14 @@ public extension RuleBook {
                 if trigger.directions.isEmpty || trigger.directions.count > 12 { add(prefix + ".trigger", "A drawing needs between 1 and 12 directions.") }
                 if zip(trigger.directions, trigger.directions.dropFirst()).contains(where: { $0.0 == $0.1 }) {
                     add(prefix + ".trigger", "Consecutive drawing directions must differ.")
+                }
+            case .shape(let trigger):
+                modifiers = trigger.modifiers
+                if ShapeGestureRecognizer.normalizedPath(trigger.points).isEmpty {
+                    add(prefix + ".trigger", "Record a nondegenerate shape with 2 to 2,048 finite points.")
+                }
+                if !trigger.tolerance.isFinite || !(0.03...0.4).contains(trigger.tolerance) {
+                    add(prefix + ".trigger.tolerance", "Shape tolerance must be between 0.03 and 0.4.")
                 }
             case .keyboard(let trigger): modifiers = trigger.modifiers
             case .touch(let trigger):

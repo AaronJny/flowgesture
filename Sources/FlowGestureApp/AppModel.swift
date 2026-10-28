@@ -316,8 +316,22 @@ final class AppModel: ObservableObject {
         switch trigger {
         case .mouseButton(let value): return "\(L10n.modifiers(value.modifiers))\(t(L10n.mouse(value.button))) ×\(value.clickCount)"
         case .draw(let value): return "\(L10n.modifiers(value.modifiers))\(t(L10n.mouse(value.button))) \(value.directions.map(L10n.arrow).joined(separator: " "))"
+        case .shape(let value): return "\(L10n.modifiers(value.modifiers))\(t(L10n.mouse(value.button))) · \(t("Free-form shape"))"
         case .keyboard(let value): return "\(L10n.modifiers(value.modifiers))#\(value.keyCode)"
-        case .touch: return t("Touch gesture")
+        case .touch(let value):
+            let device: String
+            switch value.device {
+            case .any: device = t("Any touch device")
+            case .trackpad: device = t("Trackpad")
+            case .mouse: device = t("Mouse touch surface")
+            }
+            let gesture: String
+            switch value.gesture {
+            case .tap(let fingers): gesture = "\(fingers) · \(t("Tap"))"
+            case .swipe(let fingers, let direction): gesture = "\(fingers) · \(t("Swipe")) \(L10n.arrow(direction))"
+            case .pinch(let direction): gesture = t("Pinch") + " " + t(direction == .inward ? "Inward" : "Outward")
+            }
+            return "\(L10n.modifiers(value.modifiers))\(device) · \(gesture)"
         case .screenCorner(let value): return "\(L10n.modifiers(value.modifiers))\(t(L10n.corner(value.corner)))"
         }
     }
@@ -339,7 +353,7 @@ final class AppModel: ObservableObject {
         try Self.validate(value)
         let data = try Self.encoded(value)
         if FileManager.default.fileExists(atPath: configurationURL.path) {
-            let previous = try Data(contentsOf: configurationURL)
+            let previous = try BoundedFileReader.read(at: configurationURL)
             if let previousBook = try? JSONDecoder().decode(RuleBook.self, from: previous), previousBook.validationIssues().isEmpty {
                 try previous.write(to: backupURL, options: .atomic)
             }
@@ -349,13 +363,27 @@ final class AppModel: ObservableObject {
 
     private func replaceConfiguration(_ value: RuleBook, pause: Bool) throws {
         try Self.validate(value)
+        // Rename within Application Support preserves even corrupt/oversized files
+        // without streaming their contents or following a substituted FIFO/symlink.
+        var archived: URL?
         if FileManager.default.fileExists(atPath: configurationURL.path) {
             let archive = configurationURL.deletingLastPathComponent().appendingPathComponent("rules.archive.\(UUID().uuidString).json")
-            try FileManager.default.copyItem(at: configurationURL, to: archive)
+            if let data = try? BoundedFileReader.read(at: configurationURL),
+               let old = try? JSONDecoder().decode(RuleBook.self, from: data), old.validationIssues().isEmpty {
+                try data.write(to: backupURL, options: .atomic)
+            }
+            try FileManager.default.moveItem(at: configurationURL, to: archive)
+            archived = archive
         }
         // Stop native execution before swapping in potentially executable imported actions.
         if pause { isEnabled = false }
-        try persist(value)
+        do { try persist(value) }
+        catch {
+            if let archived, !FileManager.default.fileExists(atPath: configurationURL.path) {
+                try FileManager.default.moveItem(at: archived, to: configurationURL)
+            }
+            throw error
+        }
         suppressPersistence = true
         book = value
         configurationLoadError = nil
@@ -423,9 +451,7 @@ final class AppModel: ObservableObject {
         return try encoder.encode(value)
     }
     private static func readBook(at url: URL) throws -> RuleBook {
-        let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-        guard size <= 8 * 1024 * 1024 else { throw ConfigurationError("Configuration exceeds the 8 MB size limit.") }
-        let value = try JSONDecoder().decode(RuleBook.self, from: Data(contentsOf: url))
+        let value = try JSONDecoder().decode(RuleBook.self, from: BoundedFileReader.read(at: url))
         try validate(value)
         return value
     }

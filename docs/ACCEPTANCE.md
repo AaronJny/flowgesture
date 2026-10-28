@@ -21,8 +21,8 @@ is not proof of hardware correctness. No real-device rows are marked passed yet.
 
 ## Remaining parity items requiring subsequent implementation or validation
 
-- Free-form template shapes beyond directional sequences and gesture recorder. Live non-intercepting stroke overlay is implemented, awaiting hardware validation.
-- Touch regions, rotate/force/edge gesture families; explicit Magic Mouse vs trackpad rule scopes.
+- Free-form recording, preview and matching are implemented with pure recognition tests; real-mouse accuracy and ergonomics remain unverified. Live non-intercepting stroke overlay awaits hardware validation.
+- Touch regions, rotate/force/edge gesture families remain pending. Trackpad vs touch-mouse rule scopes are implemented; physical device classification still needs verification.
 - Native system-gesture conflict suppression/arbitration (capture alone is not suppression).
 - Full BAB action and gesture catalogue comparison, app-picker ergonomics and login launch.
 - Hardware verification on Intel/Apple Silicon and macOS versions; notarization/distribution later.

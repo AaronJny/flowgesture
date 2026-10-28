@@ -39,6 +39,8 @@ The native test never starts capture on macOS and does not request Input Monitor
 
 Use a recognizer per `deviceID`. Reset all recognizers on `onReset`; never combine contacts from different devices. Coordinates use a bottom-left origin, with positive Y up. Frame timestamps are the framework's monotonic seconds, not wall-clock dates; they are suitable for intervals inside a touch stream, not direct comparison with `Date`.
 
+Saved touch rules carry `TouchDeviceScope.any`, `.trackpad`, or `.mouse` (for a touch-capable mouse such as Magic Mouse). Existing JSON without the `device` field, or with a null field, imports as `.any`; malformed explicit values still fail decoding. Valid schema-1 settings migrate to schema 2 in memory. Exports always advertise schema 2 so older versions reject the new format rather than ignore device restrictions; unknown schema versions remain marked as unknown and are rejected by validation. This model migration does not change the application’s disk-loading policy. Only a saved `.any` rule is a wildcard: an observed event with unresolved type cannot match a device-specific rule. Gesture details and modifiers remain exact. Existing app-specific, priority, and saved-order precedence is unchanged. Device-scoped rule support does not establish hardware identification accuracy or system-gesture suppression.
+
 ## Ownership and delivery
 
 The native adapter enumerates the complete returned device list, retains each unique device for its registration lifetime, registers each callback independently, and reports individual start errors. It does not exclusively seize HID devices or request a systemwide gesture suppression mechanism.

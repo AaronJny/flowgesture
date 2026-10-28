@@ -10,6 +10,7 @@ final class EventEngine {
     var onEvent: ((String) -> Void)?
     var onError: ((String) -> Void)?
     private var book = RuleBook()
+    private var configurationGeneration: UInt64 = 0
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?
     private let executor = ActionExecutor()
@@ -21,6 +22,12 @@ final class EventEngine {
     private var points: [GesturePoint] = []
     private var pendingButton: MouseButton?
     private var discardedButton: MouseButton?
+    private var clickResolver = ClickSequenceResolver()
+    private var clickTimer: Timer?
+    private var clickEvents: [CGEvent] = []
+    private var clickButton: MouseButton?
+    private var clickModifiers: ModifierKeys = []
+    private var clickApp: String?
     private var pendingModifiers: ModifierKeys = []
     private var pendingApp: String?
     private var corner: ScreenCorner?
@@ -41,13 +48,13 @@ final class EventEngine {
                 if frame.activeContacts.isEmpty { self.blockedTouchDevices.remove(frame.deviceID) }
                 return
             }
-            var recognizer = self.touchRecognizers[frame.deviceID] ?? TouchGestureRecognizer()
+            var recognizer = self.touchRecognizers[frame.deviceID] ?? TouchGestureRecognizer(configuration: TouchGestureConfiguration(includesDiagonalSwipes: true))
             if frame.cancelled { self.touchRecognizers.removeValue(forKey: frame.deviceID); self.blockedTouchDevices.insert(frame.deviceID); return }
             let samples = frame.activeContacts.map {
                 TouchSample(id: Int($0.id), location: GesturePoint(x: $0.x, y: $0.y))
             }
             if let gesture = recognizer.process(frame: TouchFrame(timestamp: frame.timestamp, touches: samples)) {
-                _ = self.fire(.touch(TouchGestureTrigger(gesture: gesture, modifiers: Self.modifiers(CGEventSource.flagsState(.combinedSessionState)))))
+                _ = self.fire(.touch(TouchGestureTrigger(gesture: gesture, modifiers: Self.modifiers(CGEventSource.flagsState(.combinedSessionState)), device: device.kind == .trackpad ? .trackpad : .mouse)))
             }
             self.touchRecognizers[frame.deviceID] = recognizer
         }
@@ -59,7 +66,7 @@ final class EventEngine {
             self.blockedTouchDevices.formUnion(self.touchRecognizers.keys)
             self.touchRecognizers.removeAll()
             self.smoother.reset()
-            self.cancelPending()
+            self.cancelPending(); self.completeClicks(count: nil, replay: false)
         })
         workspaceObservers.append(center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             guard let self, self.isRunning else { return }
@@ -69,7 +76,8 @@ final class EventEngine {
     deinit { stop(); workspaceObservers.forEach { NSWorkspace.shared.notificationCenter.removeObserver($0) } }
 
     func configure(_ configuration: RuleBook) {
-        flushPending(); blockedTouchDevices.formUnion(touchRecognizers.keys); touchRecognizers.removeAll()
+        configurationGeneration &+= 1; executor.cancelPending()
+        flushPending(); completeClicks(count: nil, replay: true); blockedTouchDevices.formUnion(touchRecognizers.keys); touchRecognizers.removeAll()
         book = configuration; smoother.reset()
     }
     func start() {
@@ -94,7 +102,8 @@ final class EventEngine {
         onStatus?("Running / 运行中")
     }
     func stop() {
-        flushPending()
+        configurationGeneration &+= 1; executor.cancelPending()
+        flushPending(); completeClicks(count: nil, replay: true)
         if let tap { CGEvent.tapEnable(tap: tap, enable: false) }
         if let source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
         source = nil; tap = nil
@@ -115,7 +124,12 @@ final class EventEngine {
         }
         if event.getIntegerValueField(.eventSourceUserData) == Self.syntheticTag { return Unmanaged.passUnretained(event) }
         if type == .keyUp, swallowedKeys.remove(UInt16(event.getIntegerValueField(.keyboardEventKeycode))) != nil { return nil }
-        let app = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        let foreground = NSWorkspace.shared.frontmostApplication
+        let app = foreground?.bundleIdentifier
+        if foreground?.processIdentifier == ProcessInfo.processInfo.processIdentifier {
+            smoother.reset(); cancelPending(); completeClicks(count: nil, replay: false)
+            return Unmanaged.passUnretained(event)
+        }
         if let discardedButton, Int(event.getIntegerValueField(.mouseEventButtonNumber)) == discardedButton.rawValue,
            [.leftMouseUp,.rightMouseUp,.otherMouseUp,.leftMouseDragged,.rightMouseDragged,.otherMouseDragged].contains(type) {
             if [.leftMouseUp,.rightMouseUp,.otherMouseUp].contains(type) { self.discardedButton = nil }
@@ -141,11 +155,19 @@ final class EventEngine {
         let dragged = [.leftMouseDragged,.rightMouseDragged,.otherMouseDragged].contains(type)
         guard let button = MouseButton(rawValue: Int(event.getIntegerValueField(.mouseEventButtonNumber))) else { return Unmanaged.passUnretained(event) }
         if down {
+            if let expired = clickResolver.advance(now: ProcessInfo.processInfo.systemUptime) { completeClicks(count: expired, replay: true) }
+            if clickButton != nil && (clickButton != button || clickModifiers != mods || clickApp != app) { completeClicks(count: nil, replay: true) }
+            if let prior = clickResolver.pendingCount {
+                let incoming = Int(event.getIntegerValueField(.mouseEventClickState))
+                if incoming <= prior { completeClicks(count: prior, replay: true) }
+                else { clickTimer?.invalidate(); clickTimer = nil }
+            }
             flushPending()
             let relevant = book.rules.contains { rule in
                 guard rule.isEnabled && rule.scope.includes(app) else { return false }
                 switch rule.trigger {
                 case .draw(let t): return t.button == button && t.modifiers == mods
+                case .shape(let t): return t.button == button && t.modifiers == mods
                 case .mouseButton(let t): return t.button == button && t.modifiers == mods
                 default: return false
                 }
@@ -165,15 +187,48 @@ final class EventEngine {
             if up {
                 overlay.hide()
                 let directions = DrawGestureRecognizer().directions(for: points)
-                let trigger: InputTrigger = directions.isEmpty
-                    ? .mouseButton(MouseButtonTrigger(button: button, clickCount: Int(event.getIntegerValueField(.mouseEventClickState)), modifiers: pendingModifiers))
-                    : .draw(DrawGestureTrigger(button: button, directions: directions, modifiers: pendingModifiers))
-                if fire(trigger) { pending.removeAll(); points.removeAll(); pendingButton = nil }
-                else { flushPending() }
+                if (ShapeGestureRecognizer.strokeExtent(points) ?? 0) < 16 {
+                    let maximum = book.rules.compactMap { rule -> Int? in
+                        guard rule.isEnabled, rule.scope.includes(app), case .mouseButton(let trigger) = rule.trigger,
+                              trigger.button == button, trigger.modifiers == pendingModifiers else { return nil }
+                        return trigger.clickCount
+                    }.max() ?? 1
+                    clickButton = button; clickModifiers = pendingModifiers; clickApp = app
+                    clickEvents.append(contentsOf: pending)
+                    pending.removeAll(); points.removeAll(); pendingButton = nil
+                    let decision = clickResolver.evaluate(count: Int(event.getIntegerValueField(.mouseEventClickState)), maxRegisteredClickCount: maximum,
+                                                          now: ProcessInfo.processInfo.systemUptime, interval: NSEvent.doubleClickInterval)
+                    clickTimer?.invalidate(); clickTimer = nil
+                    switch decision {
+                    case .deliver(let count): completeClicks(count: count, replay: true)
+                    case .ignored: completeClicks(count: nil, replay: true)
+                    case .deferred(let deadline):
+                        let timer = Timer(timeInterval: max(0.001, deadline - ProcessInfo.processInfo.systemUptime), repeats: false) { [weak self] _ in
+                            guard let self else { return }
+                            let count = self.clickResolver.advance(now: ProcessInfo.processInfo.systemUptime)
+                            self.completeClicks(count: count, replay: true)
+                        }
+                        clickTimer = timer; RunLoop.main.add(timer, forMode: .common)
+                    }
+                } else {
+                    completeClicks(count: nil, replay: true)
+                    let triggers: [InputTrigger] = [.draw(DrawGestureTrigger(button: button, directions: directions, modifiers: pendingModifiers)),
+                                                    .shape(ShapeGestureTrigger(button: button, points: ShapeGestureRecognizer.normalizedPath(points), modifiers: pendingModifiers))]
+                    if fire(triggers) { pending.removeAll(); points.removeAll(); pendingButton = nil }
+                    else { flushPending() }
+                }
             }
             return nil
         }
         return Unmanaged.passUnretained(event)
+    }
+    private func completeClicks(count: Int?, replay: Bool) {
+        clickTimer?.invalidate(); clickTimer = nil
+        let events = clickEvents, button = clickButton, modifiers = clickModifiers, app = clickApp
+        clickEvents.removeAll(); clickButton = nil; clickApp = nil; clickResolver.cancel()
+        guard app == NSWorkspace.shared.frontmostApplication?.bundleIdentifier else { return }
+        if let count, let button, fire(.mouseButton(MouseButtonTrigger(button: button, clickCount: count, modifiers: modifiers))) { return }
+        if replay { for event in events { event.setIntegerValueField(.eventSourceUserData, value: Self.syntheticTag); event.post(tap: .cgSessionEventTap) } }
     }
     private func cancelPending() {
         if let pendingButton { discardedButton = pendingButton }
@@ -184,10 +239,22 @@ final class EventEngine {
         let events = pending; pending.removeAll(); points.removeAll(); pendingButton = nil
         for event in events { event.setIntegerValueField(.eventSourceUserData, value: Self.syntheticTag); event.post(tap: .cgSessionEventTap) }
     }
-    @discardableResult private func fire(_ trigger: InputTrigger) -> Bool {
+    @discardableResult private func fire(_ trigger: InputTrigger) -> Bool { fire([trigger]) }
+    @discardableResult private func fire(_ triggers: [InputTrigger]) -> Bool {
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return false }
         let app = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-        guard let rule = RuleMatcher.bestMatch(for: trigger, in: app, ruleBook: book), !rule.actions.isEmpty else { return false }
-        DispatchQueue.main.async { [weak self] in self?.onEvent?(rule.name); self?.executor.execute(rule.actions) }
+        let ids = Set(triggers.flatMap { RuleMatcher.matchingRules(for: $0, in: app, rules: book.rules, excludedBundleIdentifiers: book.excludedBundleIdentifiers).map(\.id) })
+        let matches = book.rules.enumerated().filter { ids.contains($0.element.id) }.sorted { left, right in
+            if left.element.scope.isGlobal != right.element.scope.isGlobal { return !left.element.scope.isGlobal }
+            if left.element.priority != right.element.priority { return left.element.priority > right.element.priority }
+            return left.offset < right.offset
+        }
+        guard let rule = matches.first?.element, !rule.actions.isEmpty else { return false }
+        let generation = configurationGeneration
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.isRunning, self.configurationGeneration == generation else { return }
+            self.onEvent?(rule.name); self.executor.execute(rule.actions)
+        }
         return true
     }
     private func processScroll(_ event: CGEvent) -> Unmanaged<CGEvent>? {

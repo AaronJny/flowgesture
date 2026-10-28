@@ -44,6 +44,22 @@ public struct DrawGestureTrigger: Codable, Hashable, Sendable {
     }
 }
 
+/// Recorded single-stroke template. Points use positive Y up, like other core gestures.
+/// `tolerance` is a normalized mean-distance tolerance; 0.15 means 85% similarity.
+public struct ShapeGestureTrigger: Codable, Hashable, Sendable {
+    public var button: MouseButton
+    public var points: [GesturePoint]
+    public var modifiers: ModifierKeys
+    public var tolerance: Double
+    public init(button: MouseButton = .right, points: [GesturePoint] = [],
+                modifiers: ModifierKeys = [], tolerance: Double = 0.15) {
+        self.button = button
+        self.points = points
+        self.modifiers = modifiers
+        self.tolerance = tolerance
+    }
+}
+
 /// Uses macOS virtual key codes; a UI can retain a display label separately.
 public struct KeyboardShortcut: Codable, Hashable, Sendable {
     public var keyCode: UInt16
@@ -65,9 +81,22 @@ public enum TouchGesture: Codable, Hashable, Sendable {
 public struct TouchGestureTrigger: Codable, Hashable, Sendable {
     public var gesture: TouchGesture
     public var modifiers: ModifierKeys
-    public init(gesture: TouchGesture = .tap(fingers: 3), modifiers: ModifierKeys = []) {
+    public var device: TouchDeviceScope
+    public init(gesture: TouchGesture = .tap(fingers: 3), modifiers: ModifierKeys = [],
+                device: TouchDeviceScope = .any) {
         self.gesture = gesture
         self.modifiers = modifiers
+        self.device = device
+    }
+
+    private enum CodingKeys: String, CodingKey { case gesture, modifiers, device }
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        gesture = try values.decode(TouchGesture.self, forKey: .gesture)
+        modifiers = try values.decode(ModifierKeys.self, forKey: .modifiers)
+        // Settings created before device-scoped touch rules apply to any device.
+        // Invalid explicit values still fail decoding instead of widening scope.
+        device = try values.decodeIfPresent(TouchDeviceScope.self, forKey: .device) ?? .any
     }
 }
 
@@ -87,6 +116,7 @@ public struct ScreenCornerTrigger: Codable, Hashable, Sendable {
 public enum InputTrigger: Codable, Hashable, Sendable {
     case mouseButton(MouseButtonTrigger)
     case draw(DrawGestureTrigger)
+    case shape(ShapeGestureTrigger)
     case keyboard(KeyboardShortcut)
     case touch(TouchGestureTrigger)
     case screenCorner(ScreenCornerTrigger)
@@ -188,7 +218,9 @@ public struct ScrollConfiguration: Codable, Hashable, Sendable {
 }
 
 public struct RuleBook: Codable, Hashable, Sendable {
-    public static let currentSchemaVersion = 1
+    // Version 2 marks device-scoped touch rules and recorded shapes. Version-1
+    // clients must reject these exports rather than ignore execution constraints.
+    public static let currentSchemaVersion = 2
     public var schemaVersion: Int
     public var rules: [Rule]
     public var scroll: ScrollConfiguration
@@ -199,5 +231,28 @@ public struct RuleBook: Codable, Hashable, Sendable {
         self.rules = rules
         self.scroll = scroll
         self.excludedBundleIdentifiers = excludedBundleIdentifiers
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion, rules, scroll, excludedBundleIdentifiers
+    }
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        let storedVersion = try values.decode(Int.self, forKey: .schemaVersion)
+        rules = try values.decode([Rule].self, forKey: .rules)
+        scroll = try values.decode(ScrollConfiguration.self, forKey: .scroll)
+        excludedBundleIdentifiers = try values.decode(Set<String>.self, forKey: .excludedBundleIdentifiers)
+        // TouchGestureTrigger supplies the legacy device=.any default. Retain
+        // unknown versions so validation rejects them instead of silently downgrading.
+        schemaVersion = storedVersion == 1 ? Self.currentSchemaVersion : storedVersion
+    }
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        // Consumers must validate before export/execution. Every supported export
+        // advertises the current format even when an in-memory legacy value is used.
+        try values.encode(Self.currentSchemaVersion, forKey: .schemaVersion)
+        try values.encode(rules, forKey: .rules)
+        try values.encode(scroll, forKey: .scroll)
+        try values.encode(excludedBundleIdentifiers, forKey: .excludedBundleIdentifiers)
     }
 }

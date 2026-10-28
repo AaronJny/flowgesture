@@ -5,19 +5,24 @@ import FlowGestureCore
 final class ActionExecutor {
     var onError: ((String) -> Void)?
     private let scriptQueue = DispatchQueue(label: "FlowGesture.actions")
+    private let gate = ActionExecutionGate()
+    func cancelPending() { gate.cancelPending() }
     func execute(_ actions: [Action]) {
+        let token = gate.snapshot()
         let app = NSWorkspace.shared.frontmostApplication
         // Ordered serial execution preserves action-list semantics, including scripts.
         scriptQueue.async { [weak self] in
             guard let self else { return }
             var targetApp = app
             for action in actions {
+                guard self.gate.isCurrent(token) else { return }
                 switch action {
                 case .appleScript(let text): self.script(text)
                 case .openApplication(let identifier):
                     let result = ApplicationLaunchResult()
                     let completed = DispatchSemaphore(value: 0)
                     DispatchQueue.main.async {
+                        guard self.gate.isCurrent(token) else { completed.signal(); return }
                         self.openApplication(identifier) { application in
                             result.store(application); completed.signal()
                         }
@@ -25,10 +30,10 @@ final class ActionExecutor {
                     guard completed.wait(timeout: .now() + 15) == .success else {
                         self.fail("Application launch timed out / 应用启动超时"); return
                     }
-                    guard let launched = result.read() else { return }
+                    guard self.gate.isCurrent(token), let launched = result.read() else { return }
                     targetApp = launched
-                    DispatchQueue.main.sync { _ = launched.activate(options: .activateIgnoringOtherApps) }
-                default: DispatchQueue.main.sync { self.perform(action, app: targetApp) }
+                    DispatchQueue.main.sync { if self.gate.isCurrent(token) { _ = launched.activate(options: .activateIgnoringOtherApps) } }
+                default: DispatchQueue.main.sync { if self.gate.isCurrent(token) { self.perform(action, app: targetApp) } }
                 }
             }
         }
@@ -115,10 +120,12 @@ final class ActionExecutor {
         let frame = CGRect(x: visible.minX, y: primaryHeight-visible.maxY, width: visible.width, height: visible.height)
         var target = frame
         if let custom {
-            guard custom.minX.isFinite, custom.minY.isFinite, custom.width.isFinite, custom.height.isFinite,
-                  custom.minX >= 0, custom.minY >= 0, custom.width > 0, custom.height > 0,
-                  custom.maxX <= 1, custom.maxY <= 1 else { fail("Window fractions must fit 0…1 / 窗口比例必须位于0…1"); return }
-            target = CGRect(x: frame.minX+custom.minX*frame.width, y: frame.minY+(1-custom.minY-custom.height)*frame.height, width: custom.width*frame.width, height: custom.height*frame.height)
+            let fraction = GestureRect(x: custom.minX, y: custom.minY, width: custom.width, height: custom.height)
+            let screen = GestureRect(x: frame.minX, y: frame.minY, width: frame.width, height: frame.height)
+            guard let result = WindowLayout.frame(forFraction: fraction, inTopOriginScreen: screen) else {
+                fail("Window fractions must fit 0…1 / 窗口比例必须位于0…1"); return
+            }
+            target = CGRect(x: result.x, y: result.y, width: result.width, height: result.height)
         } else {
             switch operation {
             case .center: target = CGRect(x: frame.midX-size.width/2, y: frame.midY-size.height/2, width: size.width, height: size.height)

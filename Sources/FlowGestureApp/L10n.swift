@@ -20,6 +20,16 @@ enum L10n {
     }
 
     private static let zh: [String: String] = [
+        "Free-form shape": "自由形状", "Record shape": "录制形状", "Cancel recording": "取消录制", "Test drawing": "试画识别",
+        "Record a shape, then draw one continuous stroke here.": "点击录制形状，然后在此处一笔绘制。",
+        "Draw with the left mouse button inside this canvas.": "在此画布中按住鼠标左键绘制。",
+        "Stroke too long. Record a shorter shape.": "笔画过长，请录制较短的形状。",
+        "points": "点", "Minimum similarity": "最低相似度", "Matched": "匹配成功", "Not matched": "未匹配",
+        "Size and position may vary. Keep the same orientation, starting point, and drawing direction. Green marks the start.": "大小和位置可变；请保持相同朝向、起点和绘制方向。绿点表示起点。",
+        "Draw a larger shape; clicks and tiny strokes are ignored.": "请绘制更大的形状；点击和微小笔画会被忽略。",
+        "Shape recorded. Hold the selected trigger button to draw it outside this editor.": "形状已录制。在编辑器外按住所选触发键绘制即可。",
+        "This build does not suppress macOS gestures. Disable an overlapping system gesture before testing the same custom gesture, otherwise both may run.": "当前版本不会拦截 macOS 原生手势。测试相同自定义手势前，请先关闭对应系统手势，否则两者可能同时执行。",
+        "Touch device": "触控设备", "Any touch device": "任意触控设备", "Trackpad": "触控板", "Mouse touch surface": "鼠标触控表面",
         "Start with an empty configuration?": "使用空配置重新开始？",
         "The original file will be archived, not deleted. All rules and scroll settings will be reset, and FlowGesture will stay paused.": "原文件将被归档，不会删除。所有规则和滚动设置将重置，FlowGesture 仍保持暂停。",
         "Create empty configuration": "创建空配置",
@@ -43,7 +53,7 @@ enum L10n {
         "Top-left": "左上角", "Top-right": "右上角", "Bottom-left": "左下角", "Bottom-right": "右下角",
         "Application scope": "应用范围", "All applications": "所有应用", "Only these applications": "仅这些应用",
         "Excluded applications": "排除的应用", "Bundle identifiers, one per line": "应用包标识符，每行一个",
-        "Choose application…": "选择应用…", "Priority": "优先级", "Higher priorities run first; only the first matching rule runs.": "优先匹配高优先级规则；仅执行首个匹配规则。",
+        "Choose application…": "选择应用…", "Priority": "优先级", "Application-specific rules run first, then higher priority, then saved order. Only the first match runs.": "应用专属规则优先，然后按优先级和保存顺序匹配。仅执行首个匹配规则。",
         "Open URL": "打开网址", "Open application": "打开应用", "AppleScript": "AppleScript", "Menu item": "菜单项",
         "Window": "窗口", "System": "系统", "URL": "网址", "Application path or bundle ID": "应用路径或包标识符",
         "Menu path, separated by >": "菜单路径，以 > 分隔", "Action": "动作",
