@@ -7,6 +7,7 @@ final class EventEngine {
     static let syntheticTag: Int64 = 0x464C4F5747455354
     var onStatus: ((String) -> Void)?
     var onTouchStatus: ((String) -> Void)?
+    var onTouchDevices: (([TouchDeviceInfo]) -> Void)?
     var onEvent: ((String) -> Void)?
     var onError: ((String) -> Void)?
     private var book = RuleBook()
@@ -59,7 +60,8 @@ final class EventEngine {
             self.touchRecognizers[frame.deviceID] = recognizer
         }
         touch.onReset = { [weak self] in self?.touchRecognizers.removeAll(); self?.blockedTouchDevices.removeAll() }
-        touch.onStatus = { [weak self] in self?.onTouchStatus?($0.message) }
+        touch.onStatus = { [weak self] status in self?.onTouchStatus?("\(status.message) · \(status.startedDevices)/\(status.enumeratedDevices) devices · \(status.receivedFrames) frames · \(status.rejectedFrames) rejected") }
+        touch.onDevicesChanged = { [weak self] in self?.onTouchDevices?($0) }
         let center = NSWorkspace.shared.notificationCenter
         workspaceObservers.append(center.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] _ in
             guard let self else { return }

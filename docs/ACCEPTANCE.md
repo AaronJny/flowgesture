@@ -19,6 +19,17 @@ is not proof of hardware correctness. No real-device rows are marked passed yet.
 | Reconnect/lifecycle | Wake and device refresh | Permission revocation, event-tap timeout, unplug/replug, clean pause/quit |
 | Packaging | SwiftPM + macOS CI + app bundle | macOS compile/tests/archive then local launch and permissions |
 
+## Automated evidence
+
+Commit `a384533096367cabf3b11d56002da90ef89859a1` passed [macOS CI](https://github.com/AaronJny/flowgesture/actions/runs/40646219550):
+84 Swift core tests, native C decoder tests, Debug build, arm64 + x86_64 Release build,
+bundle/plist/ad-hoc-signature verification, and a 3-second startup smoke test.
+The smoke test does not grant permissions, simulate input, or validate physical hardware.
+
+Pause/configuration changes invalidate queued actions between steps; an AppleScript already
+running is not forcibly interrupted. Imported/synchronized configurations remain paused until
+explicitly enabled. Bounded regular-file reads reject special files and final symlinks.
+
 ## Remaining parity items requiring subsequent implementation or validation
 
 - Free-form recording, preview and matching are implemented with pure recognition tests; real-mouse accuracy and ergonomics remain unverified. Live non-intercepting stroke overlay awaits hardware validation.

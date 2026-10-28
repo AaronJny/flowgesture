@@ -56,6 +56,7 @@ private final class FlowGestureRuntime: ObservableObject {
         engine.onEvent = { [weak model] in model?.lastEvent = $0 }
         engine.onError = { [weak model] in model?.errorMessage = $0 }
         engine.onTouchStatus = { [weak model] in model?.touchBackendStatus = $0 }
+        engine.onTouchDevices = { [weak model] in model?.touchDevices = $0 }
         model.onConfigurationChanged = { [weak self] in self?.engine.configure($0) }
         model.onEnabledChanged = { [weak self] enabled in
             guard let self else { return }

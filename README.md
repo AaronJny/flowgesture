@@ -8,10 +8,10 @@ A native macOS menu-bar app for mouse gestures, scrolling, touch gestures and ev
 
 ## Features
 
-- Draw gestures with mouse buttons, with a visible trail and replay of unmatched clicks.
+- Record free-form shapes or use directional mouse gestures, with a visible trail and replay of unmatched clicks.
 - Map side buttons and keyboard shortcuts; trigger actions from screen corners.
 - Reverse mouse scrolling independently, adjust speed and smooth discrete wheel input. Device identity keeps trackpads unchanged by default; unidentified sources are left untouched.
-- Recognize multi-finger taps, swipes and pinches from supported touch devices, including trackpads and touch mice.
+- Recognize multi-finger taps, swipes and pinches, with separate rule scopes for trackpads and touch mice.
 - Choose global or per-app rules, modifier keys, priorities and excluded apps.
 - Run shortcuts and AppleScript, open URLs/files/apps, select menu items, arrange windows and perform media/system actions.
 - Edit rules in English or Chinese; import/export JSON, restore backups and synchronize through a folder you choose.

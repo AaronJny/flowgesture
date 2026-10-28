@@ -5,13 +5,24 @@ import Darwin
 import Glibc
 #endif
 
-public enum BoundedFileReadError: Error, Equatable, Sendable {
+public enum BoundedFileReadError: Error, LocalizedError, Equatable, Sendable {
     case nonLocalFileURL
     case invalidMaximumBytes
     case symbolicLinkNotAllowed
     case notRegularFile
     case tooLarge(maximumBytes: Int)
     case systemError(operation: String, code: Int32)
+
+    public var errorDescription: String? {
+        switch self {
+        case .nonLocalFileURL: return "Choose a local file. Remote URLs and invalid file paths are not supported."
+        case .invalidMaximumBytes: return "The file-size limit is invalid."
+        case .symbolicLinkNotAllowed: return "Symbolic links cannot be imported. Choose the original file."
+        case .notRegularFile: return "Only regular files can be imported, not folders or special devices."
+        case .tooLarge(let maximumBytes): return "The file exceeds the import limit of \(maximumBytes) bytes."
+        case .systemError(let operation, let code): return "Could not \(operation) the file (system error \(code))."
+        }
+    }
 }
 
 /// Reads untrusted local import files without blocking on a FIFO or allocating

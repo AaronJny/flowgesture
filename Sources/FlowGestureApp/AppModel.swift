@@ -44,6 +44,7 @@ final class AppModel: ObservableObject {
     @Published var engineStatus = "Not running"
     @Published var lastEvent = "No event yet"
     @Published var touchBackendStatus = "Not available"
+    @Published var touchDevices: [TouchDeviceInfo] = []
     @Published private(set) var activeShortcutRecorder: UUID?
 
     var onConfigurationChanged: ((RuleBook) -> Void)?

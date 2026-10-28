@@ -247,6 +247,11 @@ private struct DiagnosticsPane: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(model.t("Touch backend")).font(.headline)
                     Text(model.t(model.touchBackendStatus)).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+                    ForEach(model.touchDevices) { device in
+                        let kind = device.kind == .trackpad ? "Trackpad" : device.kind == .mouse ? "Mouse touch surface" : "Unknown device"
+                        Text("\(device.productName.isEmpty ? model.t("Unknown device") : device.productName) · \(model.t(kind)) · \(device.isStarted ? model.t("Running") : model.t("Not running"))")
+                            .font(.caption).textSelection(.enabled)
+                    }
                 }
             }
             Section(model.t("Configuration file")) {
