@@ -44,6 +44,7 @@ final class AppModel: ObservableObject {
     @Published var engineStatus = "Not running"
     @Published var lastEvent = "No event yet"
     @Published var touchBackendStatus = "Not available"
+    @Published private(set) var activeShortcutRecorder: UUID?
 
     var onConfigurationChanged: ((RuleBook) -> Void)?
     var onEnabledChanged: ((Bool) -> Void)?
@@ -94,6 +95,33 @@ final class AppModel: ObservableObject {
         onConfigurationChanged?(book)
         onEnabledChanged?(isEnabled && configurationLoadError == nil)
         onRefreshDiagnostics?()
+    }
+
+    func beginShortcutRecording(id: UUID) {
+        activeShortcutRecorder = id
+        onInputCaptureChanged?(true)
+    }
+
+    func endShortcutRecording(id: UUID) {
+        guard activeShortcutRecorder == id else { return }
+        activeShortcutRecorder = nil
+        onInputCaptureChanged?(false)
+    }
+
+    func addExampleRules() {
+        let examples = [
+            Rule(name: t("Back — draw left"), trigger: .draw(DrawGestureTrigger(button: .right, directions: [.left])), actions: [.shortcut(FlowGestureCore.KeyboardShortcut(keyCode: 33, modifiers: .command))]),
+            Rule(name: t("Forward — draw right"), trigger: .draw(DrawGestureTrigger(button: .right, directions: [.right])), actions: [.shortcut(FlowGestureCore.KeyboardShortcut(keyCode: 30, modifiers: .command))]),
+            Rule(name: t("Back — side button"), trigger: .mouseButton(MouseButtonTrigger(button: .back)), actions: [.shortcut(FlowGestureCore.KeyboardShortcut(keyCode: 33, modifiers: .command))]),
+            Rule(name: t("Forward — side button"), trigger: .mouseButton(MouseButtonTrigger(button: .forward)), actions: [.shortcut(FlowGestureCore.KeyboardShortcut(keyCode: 30, modifiers: .command))]),
+            Rule(name: t("Mission Control — three-finger tap"), isEnabled: false, trigger: .touch(TouchGestureTrigger(gesture: .tap(fingers: 3))), actions: [.system(.missionControl)])
+        ]
+        // Repeated clicks do not create duplicate trigger/action combinations.
+        let additions = examples.filter { example in
+            !book.rules.contains { $0.trigger == example.trigger && $0.actions == example.actions && $0.scope == example.scope }
+        }
+        guard !additions.isEmpty else { return }
+        book.rules.append(contentsOf: additions)
     }
 
     func saveRule(_ rule: Rule) {
@@ -302,7 +330,9 @@ final class AppModel: ObservableObject {
         let data = try Self.encoded(value)
         if FileManager.default.fileExists(atPath: configurationURL.path) {
             let previous = try Data(contentsOf: configurationURL)
-            try previous.write(to: backupURL, options: .atomic)
+            if let previousBook = try? JSONDecoder().decode(RuleBook.self, from: previous), previousBook.validationIssues().isEmpty {
+                try previous.write(to: backupURL, options: .atomic)
+            }
         }
         try data.write(to: configurationURL, options: .atomic)
     }

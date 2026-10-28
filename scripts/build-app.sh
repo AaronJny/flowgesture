@@ -1,8 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-swift build -c release
-BIN_DIR="$(swift build -c release --show-bin-path)"
+swift build -c release --arch arm64 --arch x86_64
+BIN_DIR="$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)"
+lipo -verify_arch arm64 x86_64 "$BIN_DIR/FlowGesture"
 APP="$PWD/build/FlowGesture.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN_DIR/FlowGesture" "$APP/Contents/MacOS/FlowGesture"
@@ -23,6 +24,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 PLIST
+plutil -lint "$APP/Contents/Info.plist"
 codesign --force --sign - "$APP"
+codesign --verify --strict "$APP"
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$PWD/build/FlowGesture-macos.zip"
 printf '\nBuilt %s\n' "$APP"

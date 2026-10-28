@@ -44,10 +44,14 @@ struct RuleEditor: View {
                                 Button(role: .destructive) { rule.actions.remove(at: index) } label: { Image(systemName: "trash") }
                                     .help(model.t("Remove"))
                             }.buttonStyle(.borderless)
-                            ActionEditor(action: $rule.actions[index])
+                            ActionEditor(action: Binding(get: {
+                                rule.actions.indices.contains(index) ? rule.actions[index] : .system(.missionControl)
+                            }, set: { updated in
+                                if rule.actions.indices.contains(index) { rule.actions[index] = updated }
+                            }))
                         }.padding(.vertical, 8)
                     }
-                    Button { rule.actions.append(.shortcut(KeyboardShortcut(keyCode: 8, modifiers: .command))) } label: {
+                    Button { rule.actions.append(.shortcut(FlowGestureCore.KeyboardShortcut(keyCode: 8, modifiers: .command))) } label: {
                         Label(model.t("Add action"), systemImage: "plus")
                     }
                 }
@@ -76,7 +80,7 @@ struct RuleEditor: View {
         case .draw:
             DrawTriggerEditor(value: caseBinding($rule.trigger, fallback: DrawGestureTrigger(), extract: { if case .draw(let value) = $0 { return value }; return nil }, embed: InputTrigger.draw))
         case .keyboard:
-            ShortcutEditor(value: caseBinding($rule.trigger, fallback: KeyboardShortcut(), extract: { if case .keyboard(let value) = $0 { return value }; return nil }, embed: InputTrigger.keyboard))
+            ShortcutEditor(value: caseBinding($rule.trigger, fallback: FlowGestureCore.KeyboardShortcut(), extract: { if case .keyboard(let value) = $0 { return value }; return nil }, embed: InputTrigger.keyboard))
         case .touch:
             TouchTriggerEditor(value: caseBinding($rule.trigger, fallback: TouchGestureTrigger(), extract: { if case .touch(let value) = $0 { return value }; return nil }, embed: InputTrigger.touch))
         case .screenCorner:
@@ -101,7 +105,7 @@ private enum TriggerKind: String, CaseIterable, Identifiable {
         switch self {
         case .mouse: return .mouseButton(MouseButtonTrigger())
         case .draw: return .draw(DrawGestureTrigger())
-        case .keyboard: return .keyboard(KeyboardShortcut(keyCode: 0, modifiers: [.command, .shift]))
+        case .keyboard: return .keyboard(FlowGestureCore.KeyboardShortcut(keyCode: 0, modifiers: [.command, .shift]))
         case .touch: return .touch(TouchGestureTrigger())
         case .corner: return .screenCorner(ScreenCornerTrigger())
         }
@@ -170,9 +174,10 @@ private struct DrawTriggerEditor: View {
 
 private struct ShortcutEditor: View {
     @EnvironmentObject private var model: AppModel
-    @Binding var value: KeyboardShortcut
+    @Binding var value: FlowGestureCore.KeyboardShortcut
     @State private var monitor: Any?
     @State private var recording = false
+    @State private var recorderID = UUID()
     var body: some View {
         HStack {
             TextField(model.t("Key code"), value: Binding(get: { Int(value.keyCode) }, set: { value.keyCode = UInt16(clamping: $0) }), format: .number)
@@ -183,12 +188,13 @@ private struct ShortcutEditor: View {
         ModifiersEditor(value: $value.modifiers)
         Text(model.t("Key codes are macOS virtual key codes. Use Record shortcut to capture the key and modifiers.")).font(.caption).foregroundStyle(.secondary)
             .onDisappear { stopRecording() }
+            .onChange(of: model.activeShortcutRecorder) { if $0 != recorderID && recording { stopRecording() } }
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in stopRecording() }
     }
     private func startRecording() {
         stopRecording()
         recording = true
-        model.onInputCaptureChanged?(true)
+        model.beginShortcutRecording(id: recorderID)
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             if event.keyCode != 53 || !event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty {
                 var modifiers: ModifierKeys = []
@@ -197,7 +203,7 @@ private struct ShortcutEditor: View {
                 if event.modifierFlags.contains(.control) { modifiers.insert(.control) }
                 if event.modifierFlags.contains(.shift) { modifiers.insert(.shift) }
                 if event.modifierFlags.contains(.function) { modifiers.insert(.function) }
-                value = KeyboardShortcut(keyCode: event.keyCode, modifiers: modifiers)
+                value = FlowGestureCore.KeyboardShortcut(keyCode: event.keyCode, modifiers: modifiers)
             }
             stopRecording()
             return nil
@@ -206,7 +212,7 @@ private struct ShortcutEditor: View {
     private func stopRecording() {
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
-        if recording { model.onInputCaptureChanged?(false) }
+        if recording { model.endShortcutRecording(id: recorderID) }
         recording = false
     }
 }
@@ -318,7 +324,7 @@ private enum ActionKind: String, CaseIterable, Identifiable {
     }
     var initial: Action {
         switch self {
-        case .shortcut: return .shortcut(KeyboardShortcut(keyCode: 8, modifiers: .command))
+        case .shortcut: return .shortcut(FlowGestureCore.KeyboardShortcut(keyCode: 8, modifiers: .command))
         case .url: return .openURL("https://")
         case .application: return .openApplication("com.apple.finder")
         case .path: return .openPath(NSHomeDirectory())
@@ -340,7 +346,7 @@ private struct ActionEditor: View {
         }
         switch action {
         case .shortcut:
-            ShortcutEditor(value: caseBinding($action, fallback: KeyboardShortcut(), extract: { if case .shortcut(let value) = $0 { return value }; return nil }, embed: Action.shortcut))
+            ShortcutEditor(value: caseBinding($action, fallback: FlowGestureCore.KeyboardShortcut(), extract: { if case .shortcut(let value) = $0 { return value }; return nil }, embed: Action.shortcut))
         case .openURL:
             TextField(model.t("URL"), text: stringBinding)
         case .openApplication:

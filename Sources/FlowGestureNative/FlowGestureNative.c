@@ -119,6 +119,7 @@ static void registry_description(io_registry_entry_t entry, uint32_t *kind,
         CFTypeRef property = copy_property(current, CFSTR(kIOHIDProductKey));
         if (!name[0] && property && CFGetTypeID(property) == CFStringGetTypeID()) {
             CFStringGetCString((CFStringRef)property, name, (CFIndex)name_capacity, kCFStringEncodingUTF8);
+            name[name_capacity - 1] = '\0';
         }
         if (property) CFRelease(property);
         property = copy_property(current, CFSTR(kIOHIDVendorIDKey));

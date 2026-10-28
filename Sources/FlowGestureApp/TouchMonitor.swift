@@ -89,7 +89,10 @@ private final class TouchCallbackBox: @unchecked Sendable {
     func enqueue(_ frame: RawTouchFrame) {
         lock.lock()
         guard active else { lock.unlock(); return }
-        if frame.cancelled { blockedDevices.insert(frame.deviceID) }
+        if frame.cancelled {
+            guard !blockedDevices.contains(frame.deviceID) else { lock.unlock(); return }
+            blockedDevices.insert(frame.deviceID)
+        }
         if blockedDevices.contains(frame.deviceID), !frame.cancelled {
             // Never resume mid-gesture after loss; wait until all fingers lift.
             guard frame.activeContacts.isEmpty else { lock.unlock(); return }
@@ -234,6 +237,9 @@ final class TouchMonitor {
                                     startedDevices: Int(diagnostics.started_devices),
                                     receivedFrames: diagnostics.received_frames,
                                     rejectedFrames: diagnostics.rejected_frames)
+        if diagnostics.rejected_frames > 0 {
+            status.message += " Discarded \(diagnostics.rejected_frames) malformed touch frames; validate private-API compatibility before relying on gestures."
+        }
         var snapshot: [TouchDeviceInfo] = []
         for index in 0..<FGTouchMonitorDeviceCount(native) {
             var info = FGTouchDeviceInfo()

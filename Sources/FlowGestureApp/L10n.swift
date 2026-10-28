@@ -20,6 +20,8 @@ enum L10n {
     }
 
     private static let zh: [String: String] = [
+        "Add examples": "添加示例", "Back — draw left": "后退 — 向左绘制", "Forward — draw right": "前进 — 向右绘制",
+        "Back — side button": "后退 — 侧键", "Forward — side button": "前进 — 侧键", "Mission Control — three-finger tap": "调度中心 — 三指轻点",
         "Rules": "规则", "Scrolling": "滚动", "Settings": "设置", "Diagnostics": "诊断",
         "FlowGesture Settings…": "FlowGesture 设置…", "Quit FlowGesture": "退出 FlowGesture",
         "Enabled": "已启用", "Enable FlowGesture": "启用 FlowGesture", "Paused": "已暂停",

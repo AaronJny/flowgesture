@@ -45,6 +45,15 @@ int main(void) {
     assert(result[0].x == 0 && result[0].y == 1);
     putf(records, 48, NAN);
     assert(!FGDecodeTouchRecords(records, 1, 2, result, 2));
+    unsigned char unaligned[FG_MT_RECORD_BYTES + 1];
+    fill(unaligned + 1, 7, 5, .3, .6);
+    assert(FGDecodeTouchRecords(unaligned + 1, 1, 3, result, 2));
+    assert(result[0].identifier == 7 && result[0].state == 5);
+    unsigned char maximum[FG_MT_RECORD_BYTES * FG_MAX_CONTACTS];
+    FGTouchContact maximum_result[FG_MAX_CONTACTS];
+    for (size_t i = 0; i < FG_MAX_CONTACTS; ++i) fill(maximum + i * FG_MT_RECORD_BYTES, (int32_t)i, (int32_t)(i % 8), .4, .5);
+    assert(FGDecodeTouchRecords(maximum, FG_MAX_CONTACTS, 4, maximum_result, FG_MAX_CONTACTS));
+    assert(maximum_result[63].identifier == 63 && maximum_result[63].state == 7);
     #if !defined(__APPLE__)
     FGTouchMonitor *monitor = FGTouchMonitorCreate(callback, NULL);
     assert(monitor);

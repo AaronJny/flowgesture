@@ -83,6 +83,7 @@ private struct RulesPane: View {
                     Text("\(model.book.rules.filter(\.isEnabled).count) / \(model.book.rules.count) \(model.t("Enabled"))").foregroundStyle(.secondary)
                 }
                 Spacer()
+                Button(model.t("Add examples")) { model.addExampleRules() }
                 Button { editingRule = Rule(name: model.t("New rule"), actions: [.system(.missionControl)]) } label: {
                     Label(model.t("Add rule"), systemImage: "plus")
                 }.buttonStyle(.borderedProminent)
