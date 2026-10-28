@@ -20,6 +20,7 @@ enum L10n {
     }
 
     private static let zh: [String: String] = [
+        "Status": "状态",
         "Permission needed — features are not running yet": "尚未获得权限，功能还没有运行",
         "Your settings are saved. Allow Accessibility and Input Monitoring so FlowGesture can apply them.": "设置已经保存。请允许辅助功能与输入监控，行云手势才能执行你的设置。",
 

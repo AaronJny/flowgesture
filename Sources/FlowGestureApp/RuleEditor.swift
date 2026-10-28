@@ -577,9 +577,11 @@ private enum ActionKind: String, CaseIterable, Identifiable {
 private struct QuickActionEditor: View {
     @EnvironmentObject private var model: AppModel
     @Binding var action: Action
+    @State private var forceCustomShortcut = false
     private var preset: String {
         switch action {
         case .shortcut(let shortcut):
+            if forceCustomShortcut { return "shortcut" }
             if shortcut.modifiers == .command {
                 switch shortcut.keyCode { case 8: return "copy"; case 9: return "paste"; case 33: return "back"; case 30: return "forward"; default: break }
             }
@@ -617,8 +619,12 @@ private struct QuickActionEditor: View {
         }
     }
     private func setPreset(_ value: String) {
+        if let recorder = model.activeShortcutRecorder { model.endShortcutRecording(id: recorder) }
+        forceCustomShortcut = value == "shortcut"
         switch value {
-        case "copy", "shortcut": action = .shortcut(FlowGestureCore.KeyboardShortcut(keyCode: 8, modifiers: .command))
+        case "shortcut":
+            if case .shortcut = action {} else { action = .shortcut(FlowGestureCore.KeyboardShortcut(keyCode: 8, modifiers: .command)) }
+        case "copy": action = .shortcut(FlowGestureCore.KeyboardShortcut(keyCode: 8, modifiers: .command))
         case "paste": action = .shortcut(FlowGestureCore.KeyboardShortcut(keyCode: 9, modifiers: .command))
         case "back": action = .shortcut(FlowGestureCore.KeyboardShortcut(keyCode: 33, modifiers: .command))
         case "forward": action = .shortcut(FlowGestureCore.KeyboardShortcut(keyCode: 30, modifiers: .command))

@@ -9,6 +9,7 @@ extension AppModel {
     }
 }
 
+@MainActor
 enum MappingLabels {
     static func mouse(_ button: MouseButton, model: AppModel) -> String {
         switch button {
