@@ -22,8 +22,15 @@ struct FlowGestureApp: App {
 private struct FlowGestureMenuIcon: View {
     @EnvironmentObject private var model: AppModel
     var body: some View {
-        Image(systemName: model.isEnabled ? "cursorarrow.motionlines" : "pause.circle")
+        Image(nsImage: Self.icon).opacity(model.isEnabled ? 1 : 0.55)
     }
+    private static let icon: NSImage = {
+        let image = Bundle.main.url(forResource: "MenuBarTemplate", withExtension: "png")
+            .flatMap { NSImage(contentsOf: $0) } ?? NSImage(systemSymbolName: "cursorarrow.motionlines", accessibilityDescription: "FlowGesture")!
+        image.isTemplate = true
+        image.size = NSSize(width: 18, height: 18)
+        return image
+    }()
 }
 
 private struct FlowGestureMenu: View {

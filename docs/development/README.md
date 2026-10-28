@@ -32,7 +32,8 @@ separate owner decision before public release.
 ## Verification boundaries
 
 Core tests and native decoder tests do not exercise physical devices. The launch
-smoke test checks process startup without granting input permissions. Real-device
+smoke test checks that the settings window appears in WindowServer, then closes
+and reopens the same window, without granting input permissions. Real-device
 acceptance must separately cover permissions, native system-gesture interactions,
 hotplug/wake, input pass-through, and per-device identity.
 
