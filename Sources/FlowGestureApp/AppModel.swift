@@ -24,8 +24,19 @@ final class AppModel: ObservableObject {
             }
         }
     }
+    @Published private(set) var needsRuleReview = UserDefaults.standard.bool(forKey: "FlowGesture.needsRuleReview")
     @Published var isEnabled: Bool {
         didSet {
+            if isEnabled && needsRuleReview {
+                guard confirm(title: "Review imported rules before enabling", message: "Imported or synchronized rules can run AppleScript, type shortcuts and open external targets. Inspect their actions before enabling them.", primary: "Enable reviewed rules") else {
+                    isEnabled = false
+                    UserDefaults.standard.set(false, forKey: "FlowGesture.enabled")
+                    onEnabledChanged?(false)
+                    return
+                }
+                needsRuleReview = false
+                UserDefaults.standard.set(false, forKey: "FlowGesture.needsRuleReview")
+            }
             UserDefaults.standard.set(isEnabled, forKey: "FlowGesture.enabled")
             onEnabledChanged?(isEnabled && configurationLoadError == nil)
         }
@@ -69,7 +80,7 @@ final class AppModel: ObservableObject {
         backupURL = support.appendingPathComponent("rules.backup.json")
         baselineURL = support.appendingPathComponent("sync-baseline.json")
         language = AppLanguage(rawValue: UserDefaults.standard.string(forKey: "FlowGesture.language") ?? "system") ?? .system
-        isEnabled = UserDefaults.standard.object(forKey: "FlowGesture.enabled") as? Bool ?? true
+        isEnabled = (UserDefaults.standard.object(forKey: "FlowGesture.enabled") as? Bool ?? true) && !UserDefaults.standard.bool(forKey: "FlowGesture.needsRuleReview")
         book = RuleBook()
         do {
             try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
@@ -377,7 +388,11 @@ final class AppModel: ObservableObject {
             archived = archive
         }
         // Stop native execution before swapping in potentially executable imported actions.
-        if pause { isEnabled = false }
+        if pause {
+            isEnabled = false
+            needsRuleReview = !value.rules.isEmpty
+            UserDefaults.standard.set(needsRuleReview, forKey: "FlowGesture.needsRuleReview")
+        }
         do { try persist(value) }
         catch {
             if let archived, !FileManager.default.fileExists(atPath: configurationURL.path) {
