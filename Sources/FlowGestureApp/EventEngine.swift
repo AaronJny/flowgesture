@@ -8,6 +8,7 @@ final class EventEngine {
     var onStatus: ((String) -> Void)?
     var onTouchStatus: ((String) -> Void)?
     var onTouchDevices: (([TouchDeviceInfo]) -> Void)?
+    var onDiagnosticStatus: ((String) -> Void)?
     var onEvent: ((String) -> Void)?
     var onError: ((String) -> Void)?
     private var book = RuleBook()
@@ -17,6 +18,7 @@ final class EventEngine {
     private let executor = ActionExecutor()
     private let overlay = StrokeOverlay()
     private let touch = TouchMonitor()
+    private let diagnostics = GestureDiagnostics()
     private var blockedTouchDevices: Set<UInt64> = []
     private var touchRecognizers: [UInt64: TouchGestureRecognizer] = [:]
     private var pending: [CGEvent] = []
@@ -42,8 +44,10 @@ final class EventEngine {
 
     init() {
         executor.onError = { [weak self] in self?.onError?($0) }
+        diagnostics.onStatus = { [weak self] in self?.onDiagnosticStatus?($0) }
         touch.onFrame = { [weak self] frame in
             guard let self, self.isRunning else { return }
+            self.diagnostics.recordTouchFrame(deviceID: frame.deviceID, contacts: frame.activeContacts.count, cancelled: frame.cancelled)
             guard let device = self.touch.devices.first(where: { $0.deviceID == frame.deviceID }), device.kind == .trackpad || device.kind == .mouse else { return }
             if self.blockedTouchDevices.contains(frame.deviceID) {
                 if frame.activeContacts.isEmpty { self.blockedTouchDevices.remove(frame.deviceID) }
@@ -55,6 +59,11 @@ final class EventEngine {
                 TouchSample(id: Int($0.id), location: GesturePoint(x: $0.x, y: $0.y))
             }
             if let gesture = recognizer.process(frame: TouchFrame(timestamp: frame.timestamp, touches: samples)) {
+                switch gesture {
+                case .tap(let fingers): self.diagnostics.recordRecognition("tap.\(fingers)")
+                case .swipe(let fingers, let direction): self.diagnostics.recordRecognition("swipe.\(fingers).\(direction.rawValue)")
+                case .pinch(let direction): self.diagnostics.recordRecognition("pinch.\(direction.rawValue)")
+                }
                 _ = self.fire(.touch(TouchGestureTrigger(gesture: gesture, modifiers: Self.modifiers(CGEventSource.flagsState(.combinedSessionState)), device: device.kind == .trackpad ? .trackpad : .mouse)))
             }
             self.touchRecognizers[frame.deviceID] = recognizer
@@ -104,6 +113,7 @@ final class EventEngine {
         onStatus?("Running / 运行中")
     }
     func stop() {
+        diagnostics.stop()
         configurationGeneration &+= 1; executor.cancelPending()
         flushPending(); completeClicks(count: nil, replay: true)
         if let tap { CGEvent.tapEnable(tap: tap, enable: false) }
@@ -114,6 +124,12 @@ final class EventEngine {
         swallowedKeys.removeAll(); discardedButton = nil; corner = nil; scrollSource = nil
         onStatus?("Paused / 已暂停")
     }
+    func startGestureDiagnostics() {
+        guard isRunning else { onError?("Enable monitoring and grant permissions before starting diagnostics / 请先授予权限并启用监听"); return }
+        diagnostics.start(maxDuration: 60)
+    }
+    func stopGestureDiagnostics() { diagnostics.stop() }
+    func gestureDiagnosticData() throws -> Data { try diagnostics.snapshotData() }
     func refreshDiagnostics() { touch.refreshDiagnostics() }
     func requestAccessibility() {
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
@@ -122,7 +138,7 @@ final class EventEngine {
     private var swallowedKeys: Set<UInt16> = []
     private func handle(_ type: CGEventType, _ event: CGEvent) -> Unmanaged<CGEvent>? {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            flushPending(); if let tap { CGEvent.tapEnable(tap: tap, enable: true) }; return Unmanaged.passUnretained(event)
+            flushPending(); completeClicks(count: nil, replay: true); if let tap { CGEvent.tapEnable(tap: tap, enable: true) }; return Unmanaged.passUnretained(event)
         }
         if event.getIntegerValueField(.eventSourceUserData) == Self.syntheticTag { return Unmanaged.passUnretained(event) }
         if type == .keyUp, swallowedKeys.remove(UInt16(event.getIntegerValueField(.keyboardEventKeycode))) != nil { return nil }
@@ -268,8 +284,8 @@ final class EventEngine {
         scrollSource = identity.senderID
         scrollLocation = event.location
         if identity.kind != .mouse && !book.scroll.affectsContinuousScrolling { smoother.reset(); return Unmanaged.passUnretained(event) }
-        let rawV = continuous ? event.getDoubleValueField(.scrollWheelEventPointDeltaAxis1) : event.getDoubleValueField(.scrollWheelEventDeltaAxis1) * 10
-        let rawH = continuous ? event.getDoubleValueField(.scrollWheelEventPointDeltaAxis2) : event.getDoubleValueField(.scrollWheelEventDeltaAxis2) * 10
+        let rawV = continuous ? Double(event.getIntegerValueField(.scrollWheelEventPointDeltaAxis1)) : Double(event.getIntegerValueField(.scrollWheelEventDeltaAxis1)) * 10
+        let rawH = continuous ? Double(event.getIntegerValueField(.scrollWheelEventPointDeltaAxis2)) : Double(event.getIntegerValueField(.scrollWheelEventDeltaAxis2)) * 10
         let value = book.scroll.transform(vertical: rawV, horizontal: rawH, isContinuous: false)
         if book.scroll.smooth && !continuous {
             smoother.add(vertical: value.vertical, horizontal: value.horizontal); scrollFlags = event.flags; return nil
@@ -277,11 +293,19 @@ final class EventEngine {
         if continuous {
             let verticalScale = book.scroll.verticalMultiplier * (book.scroll.reverseVertical ? -1 : 1)
             let horizontalScale = book.scroll.horizontalMultiplier * (book.scroll.reverseHorizontal ? -1 : 1)
-            for field in [.scrollWheelEventDeltaAxis1, .scrollWheelEventFixedPtDeltaAxis1, .scrollWheelEventPointDeltaAxis1] as [CGEventField] { event.setDoubleValueField(field, value: event.getDoubleValueField(field) * verticalScale) }
-            for field in [.scrollWheelEventDeltaAxis2, .scrollWheelEventFixedPtDeltaAxis2, .scrollWheelEventPointDeltaAxis2] as [CGEventField] { event.setDoubleValueField(field, value: event.getDoubleValueField(field) * horizontalScale) }
+            for field in [.scrollWheelEventDeltaAxis1, .scrollWheelEventPointDeltaAxis1] as [CGEventField] {
+                let value = Double(event.getIntegerValueField(field)) * verticalScale
+                event.setIntegerValueField(field, value: Int64(max(-1_000_000_000, min(1_000_000_000, value.rounded()))))
+            }
+            for field in [.scrollWheelEventDeltaAxis2, .scrollWheelEventPointDeltaAxis2] as [CGEventField] {
+                let value = Double(event.getIntegerValueField(field)) * horizontalScale
+                event.setIntegerValueField(field, value: Int64(max(-1_000_000_000, min(1_000_000_000, value.rounded()))))
+            }
+            event.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: event.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1) * verticalScale)
+            event.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2, value: event.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2) * horizontalScale)
             return Unmanaged.passUnretained(event)
         }
-        guard let output = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: Int32(value.vertical.rounded()), wheel2: Int32(value.horizontal.rounded()), wheel3: 0) else { return Unmanaged.passUnretained(event) }
+        guard let output = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: Int32(max(-1_000_000, min(1_000_000, value.vertical.rounded()))), wheel2: Int32(max(-1_000_000, min(1_000_000, value.horizontal.rounded()))), wheel3: 0) else { return Unmanaged.passUnretained(event) }
         output.location = event.location; output.flags = event.flags; output.setIntegerValueField(.eventSourceUserData, value: Self.syntheticTag)
         output.post(tap: .cgSessionEventTap); return nil
     }

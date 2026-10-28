@@ -254,6 +254,16 @@ private struct DiagnosticsPane: View {
                     }
                 }
             }
+            Section(model.t("Gesture diagnostics")) {
+                Text(model.t("Record event types and touch counts in memory for up to 60 seconds. No keys, text or pointer paths are recorded. Events are never blocked."))
+                    .font(.caption).foregroundStyle(.secondary)
+                Text(model.t(model.gestureDiagnosticStatus)).font(.callout).textSelection(.enabled)
+                HStack {
+                    Button(model.t("Start recording")) { model.onStartGestureDiagnostics?() }.disabled(!model.isEnabled)
+                    Button(model.t("Stop recording")) { model.onStopGestureDiagnostics?() }
+                    Button(model.t("Export local trace…")) { model.exportGestureDiagnostics() }
+                }
+            }
             Section(model.t("Configuration file")) {
                 Text(model.configurationURL.path).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
                 Button(model.t("Show configuration folder")) { model.showConfigurationFolder() }

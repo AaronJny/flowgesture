@@ -32,6 +32,8 @@ enum L10n {
         "Review imported rules before enabling": "启用前检查导入规则",
         "Imported or synchronized rules can run AppleScript, type shortcuts and open external targets. Inspect their actions before enabling them.": "导入或同步的规则可能运行 AppleScript、输入快捷键或打开外部目标。请先检查规则中的动作，再启用。",
         "Enable reviewed rules": "启用已检查的规则",
+        "Gesture diagnostics": "手势诊断", "Not recording": "未录制", "Start recording": "开始录制", "Stop recording": "停止录制", "Export local trace…": "导出本地记录…",
+        "Record event types and touch counts in memory for up to 60 seconds. No keys, text or pointer paths are recorded. Events are never blocked.": "仅在内存中记录事件类型与触点数量，最长 60 秒。不记录按键、文字或指针轨迹，不拦截事件。",
         "Unknown device": "未知设备", "Running": "运行中",
         "Touch device": "触控设备", "Any touch device": "任意触控设备", "Trackpad": "触控板", "Mouse touch surface": "鼠标触控表面",
         "Start with an empty configuration?": "使用空配置重新开始？",

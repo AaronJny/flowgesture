@@ -56,6 +56,7 @@ final class AppModel: ObservableObject {
     @Published var lastEvent = "No event yet"
     @Published var touchBackendStatus = "Not available"
     @Published var touchDevices: [TouchDeviceInfo] = []
+    @Published var gestureDiagnosticStatus = "Not recording"
     @Published private(set) var activeShortcutRecorder: UUID?
 
     var onConfigurationChanged: ((RuleBook) -> Void)?
@@ -63,6 +64,9 @@ final class AppModel: ObservableObject {
     var onInputCaptureChanged: ((Bool) -> Void)?
     var onRequestPermissions: (() -> Void)?
     var onRefreshDiagnostics: (() -> Void)?
+    var onStartGestureDiagnostics: (() -> Void)?
+    var onStopGestureDiagnostics: (() -> Void)?
+    var gestureDiagnosticData: (() throws -> Data)?
 
     let configurationURL: URL
     private let backupURL: URL
@@ -172,6 +176,16 @@ final class AppModel: ObservableObject {
             try replaceConfiguration(next, pause: true)
             notice = t("Imported rules are paused. Review them, then enable FlowGesture.")
         } catch { errorMessage = error.localizedDescription }
+    }
+
+    func exportGestureDiagnostics() {
+        guard let data = gestureDiagnosticData else { return }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.json]
+        panel.nameFieldStringValue = "FlowGesture-gesture-diagnostics.json"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do { try data().write(to: url, options: .atomic) }
+        catch { errorMessage = error.localizedDescription }
     }
 
     func exportConfiguration() {
