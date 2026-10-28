@@ -26,6 +26,11 @@ jobs:
         run: bash scripts/build-app.sh
       - name: Launch smoke test
         run: bash scripts/smoke-test-app.sh
+      - name: Render rule editor for visual review
+        run: |
+          mkdir -p build/ui-review
+          build/FlowGesture.app/Contents/MacOS/FlowGesture --ui-review-screenshot "$PWD/build/ui-review/rule-editor.png"
+          build/FlowGesture.app/Contents/MacOS/FlowGesture --ui-review-screenshot "$PWD/build/ui-review/scrolling.png" --ui-review-scrolling
       - name: Verify install image
         run: bash scripts/verify-dmg.sh build/FlowGesture-macos.dmg
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -44,3 +49,10 @@ jobs:
         run: |
           cmp build/FlowGesture-macos.dmg downloaded/FlowGesture-macos.dmg
           bash scripts/verify-dmg.sh downloaded/FlowGesture-macos.dmg
+      - name: Upload UI review image
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: success()
+        with:
+          name: FlowGesture-ui-review
+          path: build/ui-review/*.png
+          retention-days: 3

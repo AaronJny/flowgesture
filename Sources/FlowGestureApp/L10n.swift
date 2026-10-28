@@ -20,6 +20,20 @@ enum L10n {
     }
 
     private static let zh: [String: String] = [
+        "Permission needed — features are not running yet": "尚未获得权限，功能还没有运行",
+        "Your settings are saved. Allow Accessibility and Input Monitoring so FlowGesture can apply them.": "设置已经保存。请允许辅助功能与输入监控，行云手势才能执行你的设置。",
+
+        "Scroll engine is running": "滚动调整正在运行", "Scroll engine is not running": "滚动调整尚未运行",
+        "FlowGesture is paused. Enable it to apply scrolling changes.": "行云手势已暂停，启用后滚动设置才会生效。",
+        "Waiting for scrolling input": "等待滚动输入",
+        "You can test scrolling in this window. Mouse settings also apply here.": "可以直接在这个窗口测试滚动，鼠标设置在这里同样生效。",
+        "Skipped: application is excluded": "未调整：当前应用已被排除",
+        "Scroll adjustments are off": "滚动调整已关闭",
+        "Trackpad preserved: mouse-only mode": "触控板保持原样：当前仅调整鼠标",
+        "Unidentified continuous/touch scroll preserved": "未识别的连续／触控滚动保持原样",
+        "Adjusting standard mouse wheel (device name unavailable)": "正在调整普通鼠标滚轮（无法读取设备名称）",
+        "Adjusting identified device scroll": "正在调整已识别设备的滚动",
+
         "Free-form shape": "自由形状", "Record shape": "录制形状", "Cancel recording": "取消录制", "Test drawing": "试画识别",
         "Record a shape, then draw one continuous stroke here.": "点击录制形状，然后在此处一笔绘制。",
         "Draw with the left mouse button inside this canvas.": "在此画布中按住鼠标左键绘制。",

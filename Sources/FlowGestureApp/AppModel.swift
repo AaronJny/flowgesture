@@ -53,6 +53,8 @@ final class AppModel: ObservableObject {
     @Published var accessibilityGranted = false
     @Published var inputMonitoringGranted = false
     @Published var engineStatus = "Not running"
+    @Published var engineRunning = false
+    @Published var scrollStatus = "Waiting for scrolling input"
     @Published var lastEvent = "No event yet"
     @Published var touchBackendStatus = "Not available"
     @Published var touchDevices: [TouchDeviceInfo] = []

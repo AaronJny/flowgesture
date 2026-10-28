@@ -3,6 +3,7 @@ import ApplicationServices
 import Combine
 import SwiftUI
 import Darwin
+import FlowGestureCore
 
 @main
 @MainActor
@@ -22,7 +23,7 @@ struct FlowGestureApp: App {
 private struct FlowGestureMenuIcon: View {
     @EnvironmentObject private var model: AppModel
     var body: some View {
-        Image(nsImage: Self.icon).opacity(model.isEnabled ? 1 : 0.55)
+        Image(nsImage: Self.icon).opacity(model.engineRunning ? 1 : 0.55)
     }
     private static let icon: NSImage = {
         let image = Bundle.main.url(forResource: "MenuBarTemplate", withExtension: "png")
@@ -61,6 +62,7 @@ private final class FlowGestureRuntime: ObservableObject {
         // Relay nested model changes so the menu-bar icon updates as well as its content.
         modelSubscription = model.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
         engine.onStatus = { [weak model] in model?.engineStatus = $0 }
+        engine.onScrollStatus = { [weak model] in model?.scrollStatus = $0 }
         engine.onEvent = { [weak model] in model?.lastEvent = $0 }
         engine.onError = { [weak model] in model?.errorMessage = $0 }
         engine.onTouchStatus = { [weak model] in model?.touchBackendStatus = $0 }
@@ -80,6 +82,7 @@ private final class FlowGestureRuntime: ObservableObject {
             self.recording = capturing
             if capturing { self.engine.stop() }
             else if self.model.isEnabled && self.model.configurationLoadError == nil { self.engine.start() }
+            self.refreshDiagnostics()
         }
         model.onRequestPermissions = { [weak self] in
             self?.engine.requestAccessibility()
@@ -101,6 +104,7 @@ private final class FlowGestureRuntime: ObservableObject {
     }
 
     private func refreshDiagnostics() {
+        model.engineRunning = engine.isRunning
         model.accessibilityGranted = AXIsProcessTrusted()
         model.inputMonitoringGranted = CGPreflightListenEventAccess()
         engine.refreshDiagnostics()
@@ -115,6 +119,11 @@ private final class FlowGestureAppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         showSettings()
+        if let index = ProcessInfo.processInfo.arguments.firstIndex(of: "--ui-review-screenshot"),
+           ProcessInfo.processInfo.arguments.indices.contains(index + 1) {
+            let path = ProcessInfo.processInfo.arguments[index + 1]
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.captureRuleEditor(to: path) }
+        }
         if ProcessInfo.processInfo.arguments.contains("--ui-smoke-test") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.checkVisibleWindowThenReopen() }
         }
@@ -122,7 +131,19 @@ private final class FlowGestureAppDelegate: NSObject, NSApplicationDelegate {
 
     func showSettings() {
         if settingsController == nil {
-            let content = NSHostingController(rootView: SettingsView().environmentObject(runtime.model))
+            let root: AnyView
+            if ProcessInfo.processInfo.arguments.contains("--ui-review-screenshot") {
+                runtime.model.language = .simplifiedChinese
+                let example = Rule(name: "复制", trigger: .mouseButton(MouseButtonTrigger(button: .back)), actions: [.shortcut(FlowGestureCore.KeyboardShortcut(keyCode: 8, modifiers: .command))])
+                if ProcessInfo.processInfo.arguments.contains("--ui-review-scrolling") {
+                    root = AnyView(SettingsView(initialTab: "Scrolling").environmentObject(runtime.model))
+                } else {
+                    root = AnyView(RuleEditor(rule: example, onSave: { _ in true }).environmentObject(runtime.model))
+                }
+            } else {
+                root = AnyView(SettingsView().environmentObject(runtime.model))
+            }
+            let content = NSHostingController(rootView: root)
             let window = NSWindow(contentViewController: content)
             window.title = "FlowGesture"
             window.identifier = NSUserInterfaceItemIdentifier("FlowGesture.settings")
@@ -145,6 +166,17 @@ private final class FlowGestureAppDelegate: NSObject, NSApplicationDelegate {
         return false
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    private func captureRuleEditor(to path: String) {
+        guard windowIsOnScreen(), let window = settingsController?.window,
+              let image = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber), [.boundsIgnoreFraming, .bestResolution]) else {
+            fputs("FAIL: could not capture visible rule editor\n", stderr); exit(1)
+        }
+        let bitmap = NSBitmapImageRep(cgImage: image)
+        guard let png = bitmap.representation(using: .png, properties: [:]) else { exit(1) }
+        do { try png.write(to: URL(fileURLWithPath: path)); print("PASS: captured rendered rule editor"); exit(0) }
+        catch { fputs("FAIL: screenshot write failed\n", stderr); exit(1) }
+    }
 
     // Opt-in CI entrypoint exercises the production launch/reopen path. It never
     // grants input permissions or executes an input rule. WindowServer evidence

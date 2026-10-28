@@ -13,6 +13,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
 struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
     @State private var tab: SettingsTab? = .rules
+    init(initialTab: String? = nil) { _tab = State(initialValue: initialTab.flatMap(SettingsTab.init(rawValue:)) ?? .rules) }
     var body: some View {
         NavigationSplitView {
             VStack(alignment: .leading, spacing: 20) {
@@ -34,6 +35,17 @@ struct SettingsView: View {
             }.navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 260)
         } detail: {
             VStack(spacing: 0) {
+                if model.isEnabled && !model.engineRunning && (!model.accessibilityGranted || !model.inputMonitoringGranted) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label(model.t("Permission needed — features are not running yet"), systemImage: "exclamationmark.triangle.fill").font(.headline)
+                        Text(model.t("Your settings are saved. Allow Accessibility and Input Monitoring so FlowGesture can apply them.")).font(.callout)
+                        HStack {
+                            Button(model.t("Request permissions")) { model.onRequestPermissions?() }.buttonStyle(.borderedProminent)
+                            Button(model.t("Open Accessibility settings")) { model.openPrivacySettings(accessibility: true) }
+                            Button(model.t("Refresh status")) { model.onRefreshDiagnostics?() }
+                        }
+                    }.padding(14).frame(maxWidth: .infinity, alignment: .leading).background(.orange.opacity(0.16))
+                }
                 if let loadError = model.configurationLoadError {
                     VStack(alignment: .leading, spacing: 8) {
                         Label(model.t("The configuration could not be loaded. The original file has been preserved; rules are paused until you restore a backup or import a valid file."), systemImage: "exclamationmark.triangle.fill")
@@ -90,7 +102,7 @@ private struct RulesPane: View {
                 }
                 Spacer()
                 Button(model.t("Add examples")) { model.addExampleRules() }
-                Button { editingRule = Rule(name: model.t("New rule"), actions: [.system(.missionControl)]) } label: {
+                Button { editingRule = Rule(name: model.t("New rule"), actions: [.shortcut(FlowGestureCore.KeyboardShortcut(keyCode: 8, modifiers: .command))]) } label: {
                     Label(model.t("Add rule"), systemImage: "plus")
                 }.buttonStyle(.borderedProminent)
             }
@@ -147,6 +159,26 @@ private struct ScrollingPane: View {
     @EnvironmentObject private var model: AppModel
     var body: some View {
         Form {
+            Section {
+                Label(model.t(model.engineRunning ? "Scroll engine is running" : "Scroll engine is not running"),
+                      systemImage: model.engineRunning ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .foregroundStyle(model.engineRunning ? Color.green : Color.orange)
+                if !model.isEnabled {
+                    Text(model.t("FlowGesture is paused. Enable it to apply scrolling changes."))
+                    Button(model.t("Enable FlowGesture")) { model.isEnabled = true }
+                } else if !model.engineRunning {
+                    Text(model.t(model.engineStatus))
+                    HStack {
+                        Button(model.t("Request permissions")) { model.onRequestPermissions?() }
+                        Button(model.t("Refresh status")) { model.onRefreshDiagnostics?() }
+                    }
+                }
+                LabeledContent(model.t("Accessibility"), value: model.t(model.accessibilityGranted ? "Granted" : "Not granted"))
+                LabeledContent(model.t("Input Monitoring"), value: model.t(model.inputMonitoringGranted ? "Granted" : "Not granted"))
+                Text(model.t(model.scrollStatus)).font(.callout).foregroundStyle(.secondary)
+                Text(model.t("You can test scrolling in this window. Mouse settings also apply here.")).font(.caption)
+            } header: { Text(model.t("Status")) }
+
             Section {
                 Toggle(model.t("Enable scroll adjustments"), isOn: $model.book.scroll.isEnabled)
             } header: { Text(model.t("Scrolling")).font(.title2.bold()) }

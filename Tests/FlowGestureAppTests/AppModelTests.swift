@@ -56,4 +56,17 @@ final class AppModelTests: XCTestCase {
             XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent("rules.backup.json").path))
         }
     }
+    @MainActor func testScrollTogglePublishesAndPersistsWholeConfiguration() async throws {
+        try isolated { directory in
+            let model = AppModel(directory: directory)
+            var values: [Bool] = []
+            model.onConfigurationChanged = { values.append($0.scroll.reverseVertical) }
+            model.book.scroll.reverseVertical = true
+            model.book.scroll.reverseVertical = false
+            XCTAssertEqual(values, [true, false])
+            let saved = try JSONDecoder().decode(RuleBook.self, from: BoundedFileReader.read(at: model.configurationURL))
+            XCTAssertFalse(saved.scroll.reverseVertical)
+        }
+    }
+
 }

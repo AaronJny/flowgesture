@@ -11,6 +11,8 @@ final class EventEngine {
     var onDiagnosticStatus: ((String) -> Void)?
     var onEvent: ((String) -> Void)?
     var onError: ((String) -> Void)?
+    var onScrollStatus: ((String) -> Void)?
+    private var lastScrollStatus = ""
     private var book = RuleBook()
     private var configurationGeneration: UInt64 = 0
     private var tap: CFMachPort?
@@ -135,6 +137,7 @@ final class EventEngine {
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
         _ = AXIsProcessTrustedWithOptions(options)
     }
+    static func shouldBypassOwnAppEvent(_ type: CGEventType) -> Bool { type != .scrollWheel }
     private var swallowedKeys: Set<UInt16> = []
     private func handle(_ type: CGEventType, _ event: CGEvent) -> Unmanaged<CGEvent>? {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
@@ -144,7 +147,7 @@ final class EventEngine {
         if type == .keyUp, swallowedKeys.remove(UInt16(event.getIntegerValueField(.keyboardEventKeycode))) != nil { return nil }
         let foreground = NSWorkspace.shared.frontmostApplication
         let app = foreground?.bundleIdentifier
-        if foreground?.processIdentifier == ProcessInfo.processInfo.processIdentifier {
+        if foreground?.processIdentifier == ProcessInfo.processInfo.processIdentifier && Self.shouldBypassOwnAppEvent(type) {
             smoother.reset(); cancelPending(); completeClicks(count: nil, replay: false)
             return Unmanaged.passUnretained(event)
         }
@@ -153,7 +156,7 @@ final class EventEngine {
             if [.leftMouseUp,.rightMouseUp,.otherMouseUp].contains(type) { self.discardedButton = nil }
             return nil
         }
-        if book.excludedBundleIdentifiers.contains(app ?? "") || (app == nil && !book.excludedBundleIdentifiers.isEmpty) { flushPending(); return Unmanaged.passUnretained(event) }
+        if book.excludedBundleIdentifiers.contains(app ?? "") || (app == nil && !book.excludedBundleIdentifiers.isEmpty) { flushPending(); if type == .scrollWheel { reportScroll("Skipped: application is excluded") }; return Unmanaged.passUnretained(event) }
         let mods = Self.modifiers(event.flags)
         if type == .keyUp {
             if swallowedKeys.remove(UInt16(event.getIntegerValueField(.keyboardEventKeycode))) != nil { return nil }
@@ -276,39 +279,34 @@ final class EventEngine {
         return true
     }
     private func processScroll(_ event: CGEvent) -> Unmanaged<CGEvent>? {
-        guard book.scroll.isEnabled else { return Unmanaged.passUnretained(event) }
+        guard book.scroll.isEnabled else { reportScroll("Scroll adjustments are off"); return Unmanaged.passUnretained(event) }
         // Device identity is preferred. Unknown continuous sources remain untouched.
         let continuous = event.getIntegerValueField(.scrollWheelEventIsContinuous) != 0
         let identity = EventDeviceIdentity.info(for: event)
         if identity.senderID != scrollSource || hypot(event.location.x - scrollLocation.x, event.location.y - scrollLocation.y) > 2 { smoother.reset() }
         scrollSource = identity.senderID
         scrollLocation = event.location
-        if identity.kind != .mouse && !book.scroll.affectsContinuousScrolling { smoother.reset(); return Unmanaged.passUnretained(event) }
+        guard ScrollEventTransformer.shouldTransform(event, deviceKind: identity.kind, configuration: book.scroll) else {
+            smoother.reset()
+            reportScroll(identity.kind == .trackpad ? "Trackpad preserved: mouse-only mode" : "Unidentified continuous/touch scroll preserved")
+            return Unmanaged.passUnretained(event)
+        }
+        reportScroll(identity.kind == .unknown ? "Adjusting standard mouse wheel (device name unavailable)" : "Adjusting identified device scroll")
         let rawV = continuous ? Double(event.getIntegerValueField(.scrollWheelEventPointDeltaAxis1)) : Double(event.getIntegerValueField(.scrollWheelEventDeltaAxis1)) * 10
         let rawH = continuous ? Double(event.getIntegerValueField(.scrollWheelEventPointDeltaAxis2)) : Double(event.getIntegerValueField(.scrollWheelEventDeltaAxis2)) * 10
         let value = book.scroll.transform(vertical: rawV, horizontal: rawH, isContinuous: false)
         if book.scroll.smooth && !continuous {
             smoother.add(vertical: value.vertical, horizontal: value.horizontal); scrollFlags = event.flags; return nil
         }
-        if continuous {
-            let verticalScale = book.scroll.verticalMultiplier * (book.scroll.reverseVertical ? -1 : 1)
-            let horizontalScale = book.scroll.horizontalMultiplier * (book.scroll.reverseHorizontal ? -1 : 1)
-            for field in [.scrollWheelEventDeltaAxis1, .scrollWheelEventPointDeltaAxis1] as [CGEventField] {
-                let value = Double(event.getIntegerValueField(field)) * verticalScale
-                event.setIntegerValueField(field, value: Int64(max(-1_000_000_000, min(1_000_000_000, value.rounded()))))
-            }
-            for field in [.scrollWheelEventDeltaAxis2, .scrollWheelEventPointDeltaAxis2] as [CGEventField] {
-                let value = Double(event.getIntegerValueField(field)) * horizontalScale
-                event.setIntegerValueField(field, value: Int64(max(-1_000_000_000, min(1_000_000_000, value.rounded()))))
-            }
-            event.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: event.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1) * verticalScale)
-            event.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2, value: event.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2) * horizontalScale)
-            return Unmanaged.passUnretained(event)
-        }
-        guard let output = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: Int32(max(-1_000_000, min(1_000_000, value.vertical.rounded()))), wheel2: Int32(max(-1_000_000, min(1_000_000, value.horizontal.rounded()))), wheel3: 0) else { return Unmanaged.passUnretained(event) }
-        output.location = event.location; output.flags = event.flags; output.setIntegerValueField(.eventSourceUserData, value: Self.syntheticTag)
-        output.post(tap: .cgSessionEventTap); return nil
+        _ = ScrollEventTransformer.transform(event, deviceKind: identity.kind, configuration: book.scroll)
+        return Unmanaged.passUnretained(event)
     }
+    private func reportScroll(_ message: String) {
+        guard message != lastScrollStatus else { return }
+        lastScrollStatus = message
+        DispatchQueue.main.async { [weak self] in self?.onScrollStatus?(message) }
+    }
+
     private func tickScroll() {
         let step = smoother.step(deltaTime: 1.0 / 120, duration: book.scroll.effectiveSmoothingDuration)
         let v = step.vertical, h = step.horizontal
