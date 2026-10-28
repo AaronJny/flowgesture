@@ -158,7 +158,12 @@ final class MouseCaptureUISmoke {
     nonisolated private static func accessibilityCenter(identifier: String, pid: pid_t) -> MouseCaptureAXResult {
         let app = AXUIElementCreateApplication(pid)
         _ = AXUIElementSetMessagingTimeout(app, 1.0)
-        var stack = [app]
+        // Query only windows: traversing the application's AXChildren also walks
+        // its menu bar, whose self-process NSMenu bridge can assert off-main.
+        guard let windows = attribute(app, kAXWindowsAttribute as CFString) as? [AXUIElement], !windows.isEmpty else {
+            return MouseCaptureAXResult(point: nil, error: "Own-app AX windows are unavailable")
+        }
+        var stack = windows
         var inspected = 0
         while let element = stack.popLast(), inspected < 4_000 {
             inspected += 1

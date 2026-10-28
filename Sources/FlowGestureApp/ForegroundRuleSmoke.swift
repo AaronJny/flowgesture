@@ -50,6 +50,7 @@ final class ForegroundRuleSmoke {
     }
     @MainActor private func checkSideAndKeyboard() {
         guard actionEvents == 2, model.lastEvent == "foreground-side" else { fail("side-button rule did not execute while FlowGesture was foreground"); return }
+        if let window = NSApp.keyWindow { window.makeFirstResponder(window.contentView) }
         key(code: 40, flags: [.maskCommand, .maskAlternate])
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
             guard self.actionEvents == 4, self.model.lastEvent == "foreground-key" else { self.fail("keyboard rule did not execute while FlowGesture was foreground"); return }
