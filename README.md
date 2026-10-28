@@ -18,9 +18,9 @@ FlowGesture is a native macOS app for custom gestures, smoother scrolling and ev
 
 ## Download
 
-**[Download FlowGesture for macOS](https://github.com/AaronJny/flowgesture/actions)** · macOS 13+ · Apple Silicon and Intel
+**[Download FlowGesture for macOS](https://github.com/AaronJny/flowgesture/releases/latest/download/FlowGesture-macos.dmg)** · macOS 13+ · Apple Silicon and Intel
 
-[All downloads](https://github.com/AaronJny/flowgesture/actions)
+[All downloads](https://github.com/AaronJny/flowgesture/releases)
 
 ## Get started
 

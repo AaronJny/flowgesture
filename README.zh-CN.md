@@ -18,9 +18,9 @@
 
 ## 下载
 
-**[下载行云手势 macOS 版](https://github.com/AaronJny/flowgesture/actions)** · macOS 13+ · 支持 Apple Silicon 与 Intel
+**[下载行云手势 macOS 版](https://github.com/AaronJny/flowgesture/releases/latest/download/FlowGesture-macos.dmg)** · macOS 13+ · 支持 Apple Silicon 与 Intel
 
-[所有下载](https://github.com/AaronJny/flowgesture/actions)
+[所有下载](https://github.com/AaronJny/flowgesture/releases)
 
 ## 开始使用
 

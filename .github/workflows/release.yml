@@ -1,0 +1,71 @@
+name: Publish verified release
+on:
+  push:
+    branches: [main]
+    paths: [releases/v0.1.3.json]
+  workflow_dispatch:
+concurrency:
+  group: flowgesture-release-v0.1.3
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  publish:
+    runs-on: macos-14
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: write
+    env:
+      GH_REPO: AaronJny/flowgesture
+      VERSION: v0.1.3
+      TARGET: 6ec095637290a279036c44d94c73fd6564267921
+      DMG_SHA256: 386ad47465e4a442c2e1c408826080cf31bdcd507e6dbc5bc2405dee6f08ab32
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: 6ec095637290a279036c44d94c73fd6564267921
+          persist-credentials: false
+      - name: Check private repository and verified build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "$(gh api repos/$GH_REPO --jq .private)" = true
+          test "$(gh api repos/$GH_REPO/actions/runs/40659906384 --jq .head_sha)" = "$TARGET"
+          test "$(gh api repos/$GH_REPO/actions/runs/40659906384 --jq .conclusion)" = success
+          test "$(gh api repos/$GH_REPO/releases --jq '[.[] | select(.tag_name == "v0.1.3")] | length')" = 0
+          mkdir -p release
+          gh run download 40659906384 --repo "$GH_REPO" --name FlowGesture-macos --dir release
+          printf '%s  FlowGesture-macos.dmg\n' "$DMG_SHA256" > release/SHA256SUMS.txt
+          (cd release && shasum -a 256 -c SHA256SUMS.txt)
+      - name: Verify exact delivered DMG installs and opens
+        run: bash scripts/verify-dmg.sh release/FlowGesture-macos.dmg
+      - name: Create draft, verify uploaded bytes, then publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > release-notes.md <<'NOTES'
+          ## 行云手势 0.1.3
+          - 在行云手势窗口获得焦点时，已配置的映射也能正常执行。
+          - 点按、方向手势和自由形状均支持直接录制鼠标按键。
+          - 新增“切换全屏”动作，进入和退出全屏更加直接。
+
+          下载 `FlowGesture-macos.dmg`，打开后拖到“应用程序”。支持 macOS 13 及以上、Apple Silicon 和 Intel。
+
+          ## FlowGesture 0.1.3
+          - Your mappings now work while FlowGesture is the active app.
+          - Record mouse buttons for clicks, directional gestures, and free-form shapes.
+          - Use the new Toggle Full Screen action to enter or leave full screen.
+
+          Download `FlowGesture-macos.dmg`, open it, and drag FlowGesture into Applications. Requires macOS 13 or later; supports Apple Silicon and Intel.
+          NOTES
+          test "$(gh api repos/$GH_REPO/git/matching-refs/tags/$VERSION --jq 'length')" = 0
+          gh api --method POST repos/$GH_REPO/git/refs -f ref="refs/tags/$VERSION" -f sha="$TARGET" > /dev/null
+          gh release create "$VERSION" release/FlowGesture-macos.dmg release/SHA256SUMS.txt --repo "$GH_REPO" --target "$TARGET" --verify-tag --title 'FlowGesture 0.1.3 · 行云手势' --notes-file release-notes.md --draft
+          test "$(gh api repos/$GH_REPO/git/ref/tags/$VERSION --jq .object.sha)" = "$TARGET"
+          mkdir -p release-download
+          gh release download "$VERSION" --repo "$GH_REPO" --dir release-download --pattern FlowGesture-macos.dmg --pattern SHA256SUMS.txt
+          (cd release-download && shasum -a 256 -c SHA256SUMS.txt)
+          cmp release/FlowGesture-macos.dmg release-download/FlowGesture-macos.dmg
+          gh release edit "$VERSION" --repo "$GH_REPO" --draft=false --latest
+          gh release view "$VERSION" --repo "$GH_REPO" --json url,isDraft,tagName,assets
