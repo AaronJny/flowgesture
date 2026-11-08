@@ -86,11 +86,16 @@ final class ForegroundRuleSmoke {
             if view.identifier?.rawValue == "flowgesture.settings.pause" { marker = view; break }
             stack.append(contentsOf: view.subviews)
         }
-        guard let marker, !marker.isHiddenOrHasHiddenAncestor,
-              marker.visibleRect.width > 0, marker.visibleRect.height > 0 else {
+        guard let marker, !marker.isHiddenOrHasHiddenAncestor else {
             fail("pause control geometry unavailable"); return
         }
-        let inWindow = marker.convert(NSPoint(x: marker.visibleRect.midX, y: marker.visibleRect.midY), to: nil)
+        // A non-clipping SwiftUI host can report visibleRect outside this tiny
+        // marker's bounds. Always target the control's own visible intersection.
+        let targetRect = marker.bounds.intersection(marker.visibleRect)
+        guard !targetRect.isNull, targetRect.width > 0, targetRect.height > 0 else {
+            fail("pause control is clipped outside its own bounds"); return
+        }
+        let inWindow = marker.convert(NSPoint(x: targetRect.midX, y: targetRect.midY), to: nil)
         let nativePoint = window.convertPoint(toScreen: inWindow)
         let point = CGPoint(x: nativePoint.x, y: mainScreen.frame.maxY - nativePoint.y)
         pointerDiagnostics = "pause marker=\(marker.bounds), visible=\(marker.visibleRect), windowPoint=\(inWindow), HIDPoint=\(point), windowFrame=\(window.frame)"
