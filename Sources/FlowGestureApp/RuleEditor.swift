@@ -86,7 +86,7 @@ struct RuleEditor: View {
                     if onSave(rule) { dismiss() }
                 }.keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent).disabled(!issues.isEmpty || model.activeShortcutRecorder != nil)
                     .accessibilityIdentifier("flowgesture.rule.save")
-                    .background { if ProcessInfo.processInfo.arguments.contains("--mouse-capture-ui-smoke") { SmokeControlGeometry(identifier: "flowgesture.rule.save") } }
+                    .background { if ProcessInfo.processInfo.arguments.contains("--mouse-capture-ui-smoke") || ProcessInfo.processInfo.arguments.contains("--shortcut-ui-smoke") { SmokeControlGeometry(identifier: "flowgesture.rule.save") } }
             }.padding(.horizontal, 24).padding(.vertical, 16)
         }.frame(minWidth: 900, idealWidth: 980, minHeight: 690, idealHeight: 740)
     }
@@ -428,6 +428,7 @@ private struct ShortcutEditor: View {
             Button(recording ? model.mappingText("Cancel recording", "取消录制") : model.mappingText("Record keyboard shortcut", "录制完整快捷键")) {
                 recording ? stopRecording() : startRecording()
             }.buttonStyle(.borderedProminent)
+                .background { if ProcessInfo.processInfo.arguments.contains("--shortcut-ui-smoke") { SmokeControlGeometry(identifier: "flowgesture.shortcut.capture.start") } }
             Text(model.mappingText("Press all keys together, such as ⌘C. Esc cancels.", "一起按下完整组合，例如 ⌘C。Esc 取消。")).font(.caption).foregroundStyle(.secondary)
             if let captureMessage { Text(captureMessage).font(.caption).foregroundStyle(.secondary) }
             DisclosureGroup(model.mappingText("Build shortcut manually", "手动组合快捷键"), isExpanded: $manualExpanded) {
