@@ -79,9 +79,11 @@ preferences, seize devices, add private event constants or intercept new events.
 
 ## Remaining acceptance priorities
 
-1. **Run macOS tests and build.** The environment catalog has no Mac, and there
-   are no saved cloud configurations. A local test branch exists; remote push
-   and GitHub Actions have not run because push approval is pending.
+1. **Run macOS tests and build.** The environment catalog has no interactive Mac,
+   and there are no saved cloud configurations. The isolated test branch
+   `dot/touch-compatibility-20261108` is now pushed with explicit approval.
+   Its first CI run was cancelled before execution because the configured
+   `macos-14-arm64-us-default` runner is no longer supported.
 2. **Verify production fixes physically.** Exercise app/config changes during
    callback backlog, short/fast gestures, mixed devices, and real start failures.
 3. **Complete native-gesture arbitration.** Follow the existing
@@ -110,5 +112,5 @@ Before release, run the complete development/CI checks on macOS. Then reproduce
 the idle and mid-contact app/configuration changes on built-in and external
 trackpads and Magic Mouse, verify two-device isolation, and check the advice in
 English and Chinese at the minimum editor size. Touch-editor screenshots are now
-part of CI's review artifacts. Source changes remain local pending push approval;
-no remote branch, PR, release or system setting was changed.
+part of CI's review artifacts. Only the isolated test branch is being updated;
+no main-branch merge, release or system setting was changed.
