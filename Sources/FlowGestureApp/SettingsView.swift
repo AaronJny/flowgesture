@@ -30,6 +30,12 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Toggle(model.t("Enable FlowGesture"), isOn: $model.isEnabled).toggleStyle(.switch)
                         .disabled(model.configurationLoadError != nil)
+                        .background(alignment: .trailing) {
+                            if ProcessInfo.processInfo.arguments.contains("--foreground-rule-smoke") {
+                                // Mark the switch itself, not the label or a window-relative offset.
+                                ForegroundPauseControlGeometry().frame(width: 24)
+                            }
+                        }
                     Text(model.t(model.engineStatus)).font(.caption).foregroundStyle(.secondary).lineLimit(3)
                 }.padding(16)
             }.navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 260)
@@ -316,5 +322,18 @@ private struct DiagnosticsPane: View {
             Label(model.t(granted ? "Granted" : "Not granted"), systemImage: granted ? "checkmark.circle.fill" : "exclamationmark.circle")
                 .foregroundStyle(granted ? .green : .orange)
         }
+    }
+}
+
+/// Opt-in smoke geometry only. Never intercepts the real toggle's input.
+private struct ForegroundPauseControlGeometry: NSViewRepresentable {
+    func makeNSView(context: Context) -> Marker {
+        let view = Marker()
+        view.identifier = NSUserInterfaceItemIdentifier("flowgesture.settings.pause")
+        return view
+    }
+    func updateNSView(_ view: Marker, context: Context) {}
+    final class Marker: NSView {
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
     }
 }

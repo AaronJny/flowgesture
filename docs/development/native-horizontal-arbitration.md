@@ -40,6 +40,11 @@ Interruption has no lossless native recovery guarantee after some events were co
 
 Tests cover default/mismatched gates, incomplete family coverage, immutable eligibility, mayBegin/began, one-shot action and end velocity, orphan events, whole-stream pass-through, cancellation, invalid phases/numbers/source IDs, synthetic/companion/vertical events, token invalidation, and idle-reset quarantine.
 
-Swift is unavailable in the current Linux workspace, so these tests have not been compiled or executed here. Syntax and behavior need Swift CI review; test fixtures are not hardware evidence.
+The Linux workspace has no Swift toolchain. The foundation and Quartz decoder
+tests compiled and passed in the 185-test macOS 15.8.2/Swift 6.1.2 suite at
+commit `4d1911f1292edd1eb6f805f6e80237b97c1e576f`
+([CI evidence](https://github.com/AaronJny/flowgesture/actions/runs/42487472879)).
+That run later failed an unrelated foreground-UI click smoke, so it was not an
+overall CI pass. The test fixtures are not hardware interception evidence.
 
 Physical-machine blockers: complete private stream ordering; real sender retention and MT registry correlation; first opening arriving before raw action; overlay checks; class-29 companion necessity; terminal consumption without synthetic posting; three/four-finger mappings; simultaneous devices; Space edges/fullscreen/multiple displays; native animation absence; and permission/sleep/disconnect/timeout recovery. No exact-build capability is validated yet. Both actions firing, stuck animation, or unrelated-input loss fails acceptance. Vertical gestures, pinch, scroll, and taps remain outside scope.

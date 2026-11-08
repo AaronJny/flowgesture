@@ -11,6 +11,7 @@ final class ForegroundRuleSmoke {
     private var source: CFRunLoopSource?
     private var actionEvents = 0
     private var finished = false
+    private var pointerDiagnostics = "no mouse event posted"
     init(model: AppModel) { self.model = model }
 
     @MainActor func start() {
@@ -67,35 +68,106 @@ final class ForegroundRuleSmoke {
             guard field.stringValue == "a", self.actionEvents == 4 else { self.fail("text input was stolen by a keyboard rule"); return }
             window.makeFirstResponder(content)
             field.removeFromSuperview()
-            self.mouse(button: 0, x: 150, y: 720)
+            self.checkPauseControl()
+        }
+    }
+    @MainActor private func checkPauseControl() {
+        guard model.isEnabled, actionEvents == 4, model.configurationLoadError == nil else {
+            fail("pause-control precondition failed"); return
+        }
+        guard let window = settingsWindow, window.isVisible, !window.isMiniaturized,
+              let root = window.contentView, let mainScreen = NSScreen.screens.first else {
+            fail("no visible settings window for pause click"); return
+        }
+        root.layoutSubtreeIfNeeded()
+        var stack = [root]
+        var marker: NSView?
+        while let view = stack.popLast() {
+            if view.identifier?.rawValue == "flowgesture.settings.pause" { marker = view; break }
+            stack.append(contentsOf: view.subviews)
+        }
+        guard let marker, !marker.isHiddenOrHasHiddenAncestor,
+              marker.visibleRect.width > 0, marker.visibleRect.height > 0 else {
+            fail("pause control geometry unavailable"); return
+        }
+        let inWindow = marker.convert(NSPoint(x: marker.visibleRect.midX, y: marker.visibleRect.midY), to: nil)
+        let nativePoint = window.convertPoint(toScreen: inWindow)
+        let point = CGPoint(x: nativePoint.x, y: mainScreen.frame.maxY - nativePoint.y)
+        pointerDiagnostics = "pause marker=\(marker.bounds), visible=\(marker.visibleRect), windowPoint=\(inWindow), HIDPoint=\(point), windowFrame=\(window.frame)"
+        print("INFO: pause click: \(pointerDiagnostics)")
+        guard root.bounds.contains(root.convert(inWindow, from: nil)) else { fail("pause point is outside settings content"); return }
+        guard postMouse(type: .leftMouseDown, point: point, button: 0) else { return }
+        // Give AppKit a distinct down/up pair rather than two same-turn posts.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) {
+            guard self.postMouse(type: .leftMouseUp, point: point, button: 0) else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                guard !self.model.isEnabled, self.actionEvents == 4 else { self.fail("left-button rule blocked the settings pause control"); return }
+                guard !self.model.isEnabled, self.actionEvents == 4 else {
+                    self.fail("left-button rule blocked the settings pause control or the control did not receive the click"); return
+                }
                 self.finished = true
                 print("PASS: foreground side-button and keyboard mappings executed; text editing and pause-control clicks remained usable")
                 exit(0)
             }
         }
     }
+
+    @MainActor private var settingsWindow: NSWindow? {
+        NSApp.windows.first(where: { $0.identifier?.rawValue == "FlowGesture.settings" })
+    }
+
     @MainActor private func mouse(button: Int64, x: CGFloat, y: CGFloat) {
-        guard let window = NSApp.windows.first(where: { $0.identifier?.rawValue == "FlowGesture.settings" }),
+        guard let window = settingsWindow,
               let records = CGWindowListCopyWindowInfo(.optionIncludingWindow, CGWindowID(window.windowNumber)) as? [[String: Any]],
               let bounds = records.first?[kCGWindowBounds as String] as? [String: Any],
               let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary) else { fail("window bounds unavailable"); return }
         let point = CGPoint(x: frame.minX + x, y: frame.minY + y)
+        pointerDiagnostics = "button=\(button), HIDPoint=\(point), windowBounds=\(frame)"
         let types: [CGEventType] = button == 0 ? [.leftMouseDown, .leftMouseUp] : [.otherMouseDown, .otherMouseUp]
         for type in types {
-            guard let event = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: button == 0 ? .left : .center) else { fail("mouse event unavailable"); return }
-            event.setIntegerValueField(.mouseEventButtonNumber, value: button)
-            event.setIntegerValueField(.mouseEventClickState, value: 1)
-            event.post(tap: .cghidEventTap)
+            guard postMouse(type: type, point: point, button: button) else { return }
         }
     }
-    private func key(code: CGKeyCode, flags: CGEventFlags) {
+
+    @MainActor @discardableResult
+    private func postMouse(type: CGEventType, point: CGPoint, button: Int64) -> Bool {
+        guard let event = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: button == 0 ? .left : .center) else {
+            fail("mouse event unavailable"); return false
+        }
+        event.setIntegerValueField(.mouseEventButtonNumber, value: button)
+        event.setIntegerValueField(.mouseEventClickState, value: 1)
+        event.flags = []
+        event.post(tap: .cghidEventTap)
+        return true
+    }
+    @MainActor private func key(code: CGKeyCode, flags: CGEventFlags) {
         for down in [true, false] {
             guard let event = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: down) else { fail("key event unavailable"); return }
             event.flags = flags
             event.post(tap: .cghidEventTap)
         }
     }
-    private func fail(_ reason: String) { fputs("FAIL: \(reason)\n", stderr); exit(1) }
+    @MainActor private func fail(_ reason: String) {
+        guard !finished else { return }
+        finished = true
+        fputs("FAIL: \(reason); enabled=\(model.isEnabled), engineRunning=\(model.engineRunning), actionEvents=\(actionEvents), lastEvent=\(model.lastEvent), active=\(NSApp.isActive), keySettings=\(settingsWindow?.isKeyWindow == true); \(pointerDiagnostics)\n", stderr)
+        captureFailureWindow()
+        exit(1)
+    }
+
+    @MainActor private func captureFailureWindow() {
+        // Capture only our fixture window, never the desktop or another app.
+        guard let window = settingsWindow, window.isVisible,
+              let image = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber), [.boundsIgnoreFraming, .bestResolution]),
+              let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else {
+            fputs("INFO: foreground failure window capture unavailable\n", stderr); return
+        }
+        let url = URL(fileURLWithPath: "build/ui-review/foreground-smoke-failure.png")
+        do {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try png.write(to: url)
+            fputs("INFO: captured settings fixture at \(url.path)\n", stderr)
+        } catch {
+            fputs("INFO: foreground failure window capture write failed: \(error)\n", stderr)
+        }
+    }
 }

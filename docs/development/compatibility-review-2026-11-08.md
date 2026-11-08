@@ -15,7 +15,7 @@ This is a source review and a local patch, not a new release or physical-device 
 | Actions | Shortcut, script, URL/app/file, menu, window and media/system actions | AX/Automation permissions, missing menus, sandbox/secure-input behavior and application-specific window support need a real macOS session. |
 | Device lifecycle | Device enumeration, separate identities, wake refresh, topology polling, bounded callback queue, isolated failed-device retries | Capture restart with fingers down, Bluetooth reconnect and simultaneous devices require physical testing. |
 | Configuration | Validation, import/export, backups, folder sync, bilingual settings | Corrupt/imported configs are guarded; simultaneous sync edits and actual UI interactions still need macOS acceptance. |
-| Distribution | macOS 13+, arm64/x86_64 packaging and existing macOS CI | This patch has not been compiled on macOS. Notarization and wider OS/hardware certification remain separate. |
+| Distribution | macOS 13+, arm64/x86_64 packaging and macOS CI | Test-branch compilation and universal build passed on macOS 15.8.2; the full smoke suite and wider OS/hardware certification remain separate. |
 
 ## Changes in this patch
 
@@ -79,11 +79,15 @@ preferences, seize devices, add private event constants or intercept new events.
 
 ## Remaining acceptance priorities
 
-1. **Run macOS tests and build.** The environment catalog has no interactive Mac,
+1. **Complete the full macOS smoke suite.** The environment catalog has no interactive Mac,
    and there are no saved cloud configurations. The isolated test branch
    `dot/touch-compatibility-20261108` is now pushed with explicit approval.
    Its first CI run was cancelled before execution because the configured
-   `macos-14-arm64-us-default` runner is no longer supported.
+   `macos-14-arm64-us-default` runner is no longer supported. After moving CI to
+   `macos-15`, native tests, 185 Swift tests, the universal app build and launch
+   smoke passed. The foreground smoke then failed at its fixed-coordinate
+   pause-control click; use actual control geometry and retain the input-protection
+   assertion rather than skipping the check.
 2. **Verify production fixes physically.** Exercise app/config changes during
    callback backlog, short/fast gestures, mixed devices, and real start failures.
 3. **Complete native-gesture arbitration.** Follow the existing
@@ -103,8 +107,12 @@ preferences, seize devices, add private event constants or intercept new events.
 - ASan/UBSan native run: passed with `ASAN_OPTIONS=detect_leaks=0 SANITIZE=1`.
   The initial leak-enabled run failed because LeakSanitizer does not support the
   environment's ptrace setup. Leak checking is therefore **not** validated.
-- Swift tests, the macOS app build, UI/layout and launch smoke tests: **not run**;
-  this environment has no Swift toolchain, Xcode, AppKit or connected Mac.
+- macOS CI at `4d1911f1292edd1eb6f805f6e80237b97c1e576f`: **185 Swift tests
+  passed**, native tests passed, universal arm64/x86_64 app/DMG build passed,
+  settings launch and close/reopen smoke passed. The subsequent foreground-rule
+  smoke failed at the pause-control click, so this is **not an overall CI pass**.
+  [Run evidence](https://github.com/AaronJny/flowgesture/actions/runs/42487472879).
+  Later smoke, UI image and install-image stages were skipped in that run.
 - Hardware, permissions, native overlap outcomes and app compatibility: **not
   tested**. No native suppression claim is made.
 
