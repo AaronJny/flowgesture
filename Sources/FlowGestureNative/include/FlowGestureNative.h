@@ -74,6 +74,9 @@ typedef struct {
 typedef void (*FGTouchFrameCallback)(void *context, const FGTouchFrame *frame);
 FGTouchMonitor *FGTouchMonitorCreate(FGTouchFrameCallback callback, void *context);
 int32_t FGTouchMonitorStart(FGTouchMonitor *monitor);
+/* Retry only failed records. Healthy registrations and session IDs are retained.
+   Caller schedules bounded backoff; like Start, this must run serially on main. */
+int32_t FGTouchMonitorRetryFailedDevices(FGTouchMonitor *monitor);
 void FGTouchMonitorStop(FGTouchMonitor *monitor);
 void FGTouchMonitorDestroy(FGTouchMonitor *monitor);
 size_t FGTouchMonitorDeviceCount(FGTouchMonitor *monitor);

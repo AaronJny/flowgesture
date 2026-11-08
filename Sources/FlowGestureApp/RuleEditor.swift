@@ -556,7 +556,7 @@ private struct TouchTriggerEditor: View {
             }
         }
         Text(model.t("Touch support depends on the connected device and macOS. Check Diagnostics for the actual backend status.")).font(.caption).foregroundStyle(.secondary)
-        Text(model.t("This build does not suppress macOS gestures. Disable an overlapping system gesture before testing the same custom gesture, otherwise both may run.")).font(.caption).foregroundStyle(.orange)
+        TouchConflictAdviceView(trigger: value)
     }
 }
 

@@ -39,6 +39,8 @@ hotplug/wake, input pass-through, and per-device identity.
 
 See the [acceptance matrix](../ACCEPTANCE.md) and
 [touch/device implementation notes](../touch-device-validation.md).
+The [daily-use compatibility review](compatibility-review-2026-11-08.md) records
+the current source-proven gaps, the touch interruption fix and its validation limits.
 
 ## Data and execution
 

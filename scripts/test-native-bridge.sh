@@ -21,3 +21,10 @@ fi
   "$ROOT/Sources/FlowGestureNative/FlowGestureNative.c" \
   "${LINK[@]}" -o "$BUILD/bridge-test"
 "$BUILD/bridge-test"
+# Exercise production lifecycle with a fake runtime on every host; no hardware.
+"$CC" "${FLAGS[@]}" \
+  -I "$ROOT/Tests/FlowGestureNativeTests" \
+  "$ROOT/Tests/FlowGestureNativeTests/retry_test.c" \
+  "$ROOT/Sources/FlowGestureNative/TouchDecode.c" \
+  -pthread -lm -o "$BUILD/retry-test"
+"$BUILD/retry-test"

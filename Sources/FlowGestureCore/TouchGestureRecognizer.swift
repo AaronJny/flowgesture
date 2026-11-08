@@ -78,7 +78,10 @@ public struct TouchGestureRecognizer: Sendable {
         if frame.touches.isEmpty {
             defer { session = nil }
             guard let session, !session.fired, !session.cancelled,
-                  frame.timestamp - session.startedAt <= configuration.maximumTapDuration,
+                  frame.timestamp - session.startedAt <= configuration.maximumGestureDuration else { return nil }
+            // A complete short flick must not disappear while waiting for more fingers.
+            if let pending = session.pending { return pending }
+            guard frame.timestamp - session.startedAt <= configuration.maximumTapDuration,
                   session.maximumMovement <= configuration.tapMovementTolerance else { return nil }
             return .tap(fingers: session.origins.count)
         }
@@ -107,6 +110,8 @@ public struct TouchGestureRecognizer: Sendable {
                 for (id, location) in positions where current.origins[id] == nil { current.origins[id] = location }
                 current.baseline = positions
                 current.activeIDs = ids
+                // Evidence from a smaller cohort cannot commit its finger count or pinch.
+                current.pending = motionGesture(current: current, positions: positions)
             } else if ids.isStrictSubset(of: current.activeIDs) {
                 // Staggered release is normal. Do not mistake its centroid jump for a swipe.
                 current.ending = true
@@ -118,31 +123,42 @@ public struct TouchGestureRecognizer: Sendable {
             return nil
         }
         guard !current.ending else { session = current; return nil }
+        // The window includes its exact endpoint, just like the join check above.
+        // Keep the first threshold crossing for this cohort, including a quick reversal.
+        if current.pending == nil { current.pending = motionGesture(current: current, positions: positions) }
+        let gesture = elapsed > configuration.fingerJoinInterval ? current.pending : nil
+        if gesture != nil { current.fired = true }
+        session = current
+        return gesture
+    }
+
+    private func motionGesture(current: Session, positions: [Int: GesturePoint]) -> TouchGesture? {
         // Stable ordering avoids hash-seed-dependent floating-point accumulation.
-        let baselinePoints = current.baseline.keys.sorted().compactMap { current.baseline[$0] }
+        // Origins preserve movement before a join. A new contact starts with zero
+        // displacement, so only movement actually observed contributes to the swipe.
+        let originPoints = positions.keys.sorted().compactMap { current.origins[$0] }
+        let baselinePoints = positions.keys.sorted().compactMap { current.baseline[$0] }
         let points = positions.keys.sorted().compactMap { positions[$0] }
-        let startCenter = Self.centroid(baselinePoints)
+        let startCenter = Self.centroid(originPoints)
+        let baselineCenter = Self.centroid(baselinePoints)
         let center = Self.centroid(points)
         let translation = startCenter.distance(to: center)
-        let initialRadius = Self.meanRadius(baselinePoints, around: startCenter)
+        let initialRadius = Self.meanRadius(baselinePoints, around: baselineCenter)
         let radius = Self.meanRadius(points, around: center)
+        // Pinch baselines rebase when a finger joins: landing spread is not pinching.
         // Two-contact scale change and centroid translation compete on normalized evidence.
-        // A spread-out swipe should not be interpreted as a pinch because of small noise.
         let pinchEvidence = positions.count == 2 && initialRadius > 0.01
             ? abs(radius / initialRadius - 1) / configuration.pinchScaleChange : 0
         let swipeEvidence = translation / configuration.swipeDistance
-        let gesture: TouchGesture?
         if pinchEvidence >= 1 && pinchEvidence > swipeEvidence {
-            gesture = .pinch(radius < initialRadius ? .inward : .outward)
+            return .pinch(radius < initialRadius ? .inward : .outward)
         } else if swipeEvidence >= 1,
                   let direction = DrawGestureRecognizer.direction(dx: center.x - startCenter.x,
                                                                  dy: center.y - startCenter.y,
                                                                  includesDiagonals: configuration.includesDiagonalSwipes) {
-            gesture = .swipe(fingers: positions.count, direction: direction)
-        } else { gesture = nil }
-        if gesture != nil { current.fired = true }
-        session = current
-        return gesture
+            return .swipe(fingers: positions.count, direction: direction)
+        }
+        return nil
     }
 
     private struct Session: Sendable {
@@ -151,6 +167,7 @@ public struct TouchGestureRecognizer: Sendable {
         var baseline: [Int: GesturePoint]
         var activeIDs: Set<Int>
         var maximumMovement: Double = 0
+        var pending: TouchGesture?
         var fired = false
         var ending = false
         var cancelled = false

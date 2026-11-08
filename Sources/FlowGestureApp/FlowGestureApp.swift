@@ -193,8 +193,13 @@ private final class FlowGestureAppDelegate: NSObject, NSApplicationDelegate {
                     return false
                 }).environmentObject(runtime.model))
             } else if ProcessInfo.processInfo.arguments.contains("--ui-review-screenshot") || ProcessInfo.processInfo.arguments.contains("--shortcut-ui-smoke") {
-                runtime.model.language = ProcessInfo.processInfo.arguments.contains("--shortcut-ui-smoke") ? .english : .simplifiedChinese
-                let example = Rule(name: "复制", trigger: .mouseButton(MouseButtonTrigger(button: .back)), actions: [.shortcut(FlowGestureCore.KeyboardShortcut(keyCode: ProcessInfo.processInfo.arguments.contains("--ui-review-manual-shortcut") ? 123 : 8, modifiers: .command))])
+                runtime.model.language = ProcessInfo.processInfo.arguments.contains("--shortcut-ui-smoke") || ProcessInfo.processInfo.arguments.contains("--ui-review-english") ? .english : .simplifiedChinese
+                var example = Rule(name: "复制", trigger: .mouseButton(MouseButtonTrigger(button: .back)), actions: [.shortcut(FlowGestureCore.KeyboardShortcut(keyCode: ProcessInfo.processInfo.arguments.contains("--ui-review-manual-shortcut") ? 123 : 8, modifiers: .command))])
+                if ProcessInfo.processInfo.arguments.contains("--ui-review-touch") {
+                    example.trigger = .touch(TouchGestureTrigger(gesture: .swipe(fingers: 3, direction: .up), device: .trackpad))
+                } else if ProcessInfo.processInfo.arguments.contains("--ui-review-touch-mouse") {
+                    example.trigger = .touch(TouchGestureTrigger(gesture: .swipe(fingers: 2, direction: .left), device: .mouse))
+                }
                 if ProcessInfo.processInfo.arguments.contains("--ui-review-scrolling") {
                     runtime.model.book.scroll.isEnabled = false
                     root = AnyView(SettingsView(initialTab: "Scrolling").environmentObject(runtime.model))

@@ -4,12 +4,16 @@
 #include <stdlib.h>
 #include <string.h>
 
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(FG_NATIVE_TEST)
+#if defined(FG_NATIVE_TEST)
+#include "native_fixture.h"
+#else
 #include <CoreFoundation/CoreFoundation.h>
 #include <CoreGraphics/CoreGraphics.h>
 #include <IOKit/IOKitLib.h>
 #include <IOKit/hid/IOHIDKeys.h>
 #include <IOKit/hid/IOHIDUsageTables.h>
+#endif
 #include <ctype.h>
 #include <dlfcn.h>
 #include <pthread.h>
@@ -42,6 +46,7 @@ typedef struct {
     MTHandle handle; /* Explicitly retained for the registration lifetime. */
     FGTouchDeviceInfo info;
     bool registered;
+    size_t in_flight;
 } DeviceRecord;
 struct FGTouchMonitor {
     FGTouchFrameCallback callback;
@@ -53,6 +58,7 @@ struct FGTouchMonitor {
     char message[256];
 };
 
+#ifndef FG_NATIVE_TEST
 static void load_runtime(void) {
     runtime.library = dlopen("/System/Library/PrivateFrameworks/MultitouchSupport.framework/MultitouchSupport", RTLD_LAZY | RTLD_LOCAL);
     if (!runtime.library) {
@@ -192,14 +198,22 @@ static void describe_device(MTHandle handle, FGTouchDeviceInfo *info) {
     }
 }
 
+#else
+static void load_runtime(void);
+static void describe_device(MTHandle handle, FGTouchDeviceInfo *info);
+#endif
+
 static void receive_frame(MTHandle device, const void *records, size_t count,
                           double timestamp, size_t frame_number) {
     pthread_mutex_lock(&state_lock);
     FGTouchMonitor *monitor = active_monitor;
     uint64_t device_id = 0;
+    DeviceRecord *record = NULL;
     if (monitor) {
         for (size_t i = 0; i < monitor->count; ++i) {
-            if (monitor->devices[i].handle == device && monitor->devices[i].registered) {
+            if (monitor->devices[i].handle == device && monitor->devices[i].registered &&
+                monitor->devices[i].info.started) {
+                record = &monitor->devices[i];
                 device_id = monitor->devices[i].info.device_id;
                 break;
             }
@@ -207,6 +221,7 @@ static void receive_frame(MTHandle device, const void *records, size_t count,
     }
     if (!monitor || !device_id) { pthread_mutex_unlock(&state_lock); return; }
     ++monitor->in_flight;
+    ++record->in_flight;
     ++monitor->diagnostics.received_frames;
     pthread_mutex_unlock(&state_lock);
 
@@ -224,7 +239,8 @@ static void receive_frame(MTHandle device, const void *records, size_t count,
     monitor->callback(monitor->context, &frame);
     pthread_mutex_lock(&state_lock);
     --monitor->in_flight;
-    if (!monitor->in_flight) pthread_cond_broadcast(&callbacks_drained);
+    --record->in_flight;
+    pthread_cond_broadcast(&callbacks_drained);
     pthread_mutex_unlock(&state_lock);
 }
 
@@ -294,21 +310,36 @@ int32_t FGTouchMonitorStart(FGTouchMonitor *monitor) {
     monitor->diagnostics.enumerated_devices = monitor->count;
     monitor->diagnostics.started_devices = 0;
     pthread_mutex_unlock(&state_lock);
+    return FGTouchMonitorRetryFailedDevices(monitor);
+}
+
+int32_t FGTouchMonitorRetryFailedDevices(FGTouchMonitor *monitor) {
+    if (!monitor) return FGTouchStatusFailed;
+    pthread_mutex_lock(&state_lock);
+    bool active = active_monitor == monitor;
+    pthread_mutex_unlock(&state_lock);
+    if (!active) return monitor->diagnostics.status;
     for (size_t i = 0; i < monitor->count; ++i) {
         DeviceRecord *record = &monitor->devices[i];
+        if (record->info.started) continue;
+        /* Each attempt is a new session. Never admit callbacks until start has
+           returned success: failed starts can synchronously produce frames. */
         pthread_mutex_lock(&state_lock);
+        while (record->in_flight) pthread_cond_wait(&callbacks_drained, &state_lock);
+        record->info.device_id = next_session_device_id++;
         record->registered = true;
         pthread_mutex_unlock(&state_lock);
         runtime.register_frame(record->handle, receive_frame);
-        record->info.start_error = runtime.start(record->handle, 0);
-        record->info.started = record->info.start_error == 0;
+        int32_t error = runtime.start(record->handle, 0);
+        pthread_mutex_lock(&state_lock);
+        record->info.start_error = error;
+        record->info.started = error == 0;
         if (record->info.started) ++monitor->diagnostics.started_devices;
-        else {
+        else record->registered = false;
+        pthread_mutex_unlock(&state_lock);
+        if (error) {
             runtime.unregister_frame(record->handle, receive_frame);
             runtime.stop(record->handle);
-            pthread_mutex_lock(&state_lock);
-            record->registered = false;
-            pthread_mutex_unlock(&state_lock);
         }
     }
     monitor->diagnostics.status = monitor->diagnostics.started_devices ? FGTouchStatusRunning :
@@ -388,6 +419,7 @@ bool FGTouchMonitorDevicesChanged(FGTouchMonitor *monitor) {
     return changed;
 }
 
+#ifndef FG_NATIVE_TEST
 typedef CFTypeRef (*CopyHIDEventFunction)(CGEventRef);
 typedef uint64_t (*SenderIDFunction)(CFTypeRef);
 static CopyHIDEventFunction copy_hid_event;
@@ -441,6 +473,8 @@ FGEventDeviceInfo FGGetEventDeviceInfo(const void *cg_event) {
     return FGGetSenderDeviceInfo(FGGetEventSenderID(cg_event));
 }
 
+#endif /* FG_NATIVE_TEST */
+
 #else
 /* Portable stubs allow decoder and explicit-unavailable behavior to be tested
    without pretending that Linux provides macOS hardware validation. */
@@ -452,6 +486,9 @@ FGTouchMonitor *FGTouchMonitorCreate(FGTouchFrameCallback callback, void *contex
 int32_t FGTouchMonitorStart(FGTouchMonitor *monitor) {
     if (monitor) monitor->status = FGTouchStatusUnavailable;
     return FGTouchStatusUnavailable;
+}
+int32_t FGTouchMonitorRetryFailedDevices(FGTouchMonitor *monitor) {
+    return monitor ? monitor->status : FGTouchStatusFailed;
 }
 void FGTouchMonitorStop(FGTouchMonitor *monitor) { if (monitor) monitor->status = FGTouchStatusStopped; }
 void FGTouchMonitorDestroy(FGTouchMonitor *monitor) { free(monitor); }

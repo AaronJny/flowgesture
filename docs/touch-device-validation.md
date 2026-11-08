@@ -49,7 +49,9 @@ On stop, admission is revoked before unregister/stop calls; callbacks already ad
 
 A bounded 256-frame queue cancels affected sessions on overflow and drops further partial frames until all-up. Queued pre-stop frames cannot cross a new monitoring generation. Process-lifetime handles keep the small, fixed set of loaded system frameworks resident, avoiding unload races.
 
-The Swift wrapper rebuilds on system wake, stops on sleep, and checks device topology every three seconds. It retries failed device starts; it does not recreate a running device list on every timer tick. A manual refresh is available for stale driver handles not reflected by topology. Multiple simultaneous native monitors are rejected rather than registering duplicate global listeners.
+The Swift wrapper rebuilds on system wake, stops on sleep, and checks device topology every three seconds. Failed device starts retry with a 3–60 second exponential backoff without restarting healthy records. Each retry gets a new session ID; frames are admitted only after start succeeds, and queued obsolete IDs are ignored. It does not recreate a running device list on every timer tick. A manual refresh is available for stale driver handles not reflected by topology. Multiple simultaneous native monitors are rejected rather than registering duplicate global listeners.
+
+On foreground/configuration changes, acquisition-time contact state and queue invalidation share the callback lock. Undelivered old-context frames cannot enter a new context; still-active contacts remain blocked until valid all-up. A release already acquired but not yet delivered does not block the next gesture. This queue boundary does not undo an action already executing.
 
 ## Private ABI limits
 

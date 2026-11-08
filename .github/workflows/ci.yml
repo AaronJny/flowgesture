@@ -46,6 +46,8 @@ jobs:
           build/FlowGesture.app/Contents/MacOS/FlowGesture --ui-review-screenshot "$PWD/build/ui-review/scrolling.png" --ui-review-scrolling
           build/FlowGesture.app/Contents/MacOS/FlowGesture --ui-review-screenshot "$PWD/build/ui-review/manual-shortcut.png" --ui-review-manual-shortcut
           build/FlowGesture.app/Contents/MacOS/FlowGesture --ui-review-screenshot "$PWD/build/ui-review/draw-capture.png" --ui-review-draw
+          build/FlowGesture.app/Contents/MacOS/FlowGesture --ui-review-screenshot "$PWD/build/ui-review/touch-trackpad-zh.png" --ui-review-touch
+          build/FlowGesture.app/Contents/MacOS/FlowGesture --ui-review-screenshot "$PWD/build/ui-review/touch-mouse-en.png" --ui-review-touch-mouse --ui-review-english
       - name: Verify install image
         run: bash scripts/verify-dmg.sh build/FlowGesture-macos.dmg
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

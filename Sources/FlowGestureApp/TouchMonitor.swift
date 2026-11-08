@@ -2,6 +2,7 @@
 import AppKit
 import CoreGraphics
 import FlowGestureNative
+import FlowGestureCore
 
 /// Evidence-based device category. Unknown is deliberately not a mouse fallback.
 enum TouchDeviceKind: UInt32, Sendable {
@@ -68,6 +69,7 @@ private final class TouchCallbackBox: @unchecked Sendable {
     private var generation: UInt64 = 0
     private var pending: [RawTouchFrame] = []
     private var blockedDevices: Set<UInt64> = []
+    private var contactActivity = TouchContactActivity()
     private var scheduled = false
 
     func activate() {
@@ -76,6 +78,7 @@ private final class TouchCallbackBox: @unchecked Sendable {
         active = true
         pending.removeAll(keepingCapacity: true)
         blockedDevices.removeAll()
+        contactActivity.reset()
         lock.unlock()
     }
     func deactivate() {
@@ -84,18 +87,31 @@ private final class TouchCallbackBox: @unchecked Sendable {
         active = false
         pending.removeAll(keepingCapacity: true)
         blockedDevices.removeAll()
+        contactActivity.reset()
         lock.unlock()
+    }
+    func invalidatePendingFrames() -> Set<UInt64> {
+        lock.lock()
+        defer { lock.unlock() }
+        generation &+= 1
+        pending.removeAll(keepingCapacity: true)
+        // Do not replay an old app's queued gesture in the new app. The latest
+        // acquired all-up may also let an otherwise stale session become idle.
+        blockedDevices = contactActivity.activeDeviceIDs
+        return blockedDevices
     }
     func enqueue(_ frame: RawTouchFrame) {
         lock.lock()
         guard active else { lock.unlock(); return }
+        contactActivity.observe(deviceID: frame.deviceID, timestamp: frame.timestamp,
+                                hasActiveContacts: !frame.activeContacts.isEmpty, cancelled: frame.cancelled)
         if frame.cancelled {
             guard !blockedDevices.contains(frame.deviceID) else { lock.unlock(); return }
             blockedDevices.insert(frame.deviceID)
         }
         if blockedDevices.contains(frame.deviceID), !frame.cancelled {
             // Never resume mid-gesture after loss; wait until all fingers lift.
-            guard frame.activeContacts.isEmpty else { lock.unlock(); return }
+            guard frame.activeContacts.isEmpty, !contactActivity.activeDeviceIDs.contains(frame.deviceID) else { lock.unlock(); return }
             blockedDevices.remove(frame.deviceID)
         }
         if pending.count >= 256 {
@@ -162,6 +178,8 @@ final class TouchMonitor {
     private let callbackBox = TouchCallbackBox()
     private var desiredRunning = false
     private var sleeping = false
+    private var nextRetryTime: TimeInterval = 0
+    private var retryDelay: TimeInterval = 3
     private var pollTimer: Timer?
     private var workspaceObservers: [NSObjectProtocol] = []
 
@@ -204,8 +222,15 @@ final class TouchMonitor {
     }
     fileprivate func receive(_ frame: RawTouchFrame) {
         precondition(Thread.isMainThread)
-        guard desiredRunning, !sleeping else { return }
+        guard desiredRunning, !sleeping,
+              devices.contains(where: { $0.id == frame.deviceID && $0.isStarted }) else { return }
         onFrame?(frame)
+    }
+    /// Main-thread context boundary. Queue invalidation and the physical-contact
+    /// snapshot are atomic with respect to native callback admission.
+    func invalidatePendingFrames() -> Set<UInt64> {
+        precondition(Thread.isMainThread)
+        return callbackBox.invalidatePendingFrames()
     }
     private func stopCapture() {
         callbackBox.deactivate()
@@ -220,6 +245,8 @@ final class TouchMonitor {
         callbackBox.activate()
         if let native { _ = FGTouchMonitorStart(native) }
         updateSnapshot()
+        retryDelay = 3
+        nextRetryTime = ProcessInfo.processInfo.systemUptime + retryDelay
     }
     private func updateSnapshot() {
         guard let native else {
@@ -274,10 +301,22 @@ final class TouchMonitor {
         })
         let timer = Timer(timeInterval: 3, repeats: true) { [weak self] _ in
             guard let self, self.desiredRunning, !self.sleeping, let native = self.native else { return }
-            // Non-invasive enumeration; only restart on actual topology changes
-            // or a prior start failure. No device is seized/exclusively opened.
-            if FGTouchMonitorDevicesChanged(native) || self.status.state == .failed {
+            // A partial start must not reset a healthy device's live contacts.
+            // Retry failed records at 3, 6, 12, 24, 48, then 60 second intervals.
+            let now = ProcessInfo.processInfo.systemUptime
+            if FGTouchMonitorDevicesChanged(native) {
                 self.refreshDevices()
+            } else if now >= self.nextRetryTime &&
+                        (self.devices.contains(where: { !$0.isStarted }) || self.status.state == .failed) {
+                let previousDelay = self.retryDelay
+                if self.devices.isEmpty {
+                    self.restartCapture()
+                } else {
+                    _ = FGTouchMonitorRetryFailedDevices(native)
+                    self.updateSnapshot()
+                }
+                self.retryDelay = min(previousDelay * 2, 60)
+                self.nextRetryTime = now + self.retryDelay
             } else {
                 self.updateSnapshot()
             }

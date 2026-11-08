@@ -15,14 +15,14 @@ final class EventEngine {
     private var lastScrollStatus = ""
     private var book = RuleBook()
     private var configurationGeneration: UInt64 = 0
+    private var foregroundGeneration: UInt64 = 0
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?
     private let executor = ActionExecutor()
     private let overlay = StrokeOverlay()
     private let touch = TouchMonitor()
     private let diagnostics = GestureDiagnostics()
-    private var blockedTouchDevices: Set<UInt64> = []
-    private var touchRecognizers: [UInt64: TouchGestureRecognizer] = [:]
+    private var touchSessions = TouchGestureSessions(configuration: TouchGestureConfiguration(includesDiagonalSwipes: true))
     private var pending: [CGEvent] = []
     private var points: [GesturePoint] = []
     private var pendingButton: MouseButton?
@@ -51,16 +51,12 @@ final class EventEngine {
             guard let self, self.isRunning else { return }
             self.diagnostics.recordTouchFrame(deviceID: frame.deviceID, contacts: frame.activeContacts.count, cancelled: frame.cancelled)
             guard let device = self.touch.devices.first(where: { $0.deviceID == frame.deviceID }), device.kind == .trackpad || device.kind == .mouse else { return }
-            if self.blockedTouchDevices.contains(frame.deviceID) {
-                if frame.activeContacts.isEmpty { self.blockedTouchDevices.remove(frame.deviceID) }
-                return
-            }
-            var recognizer = self.touchRecognizers[frame.deviceID] ?? TouchGestureRecognizer(configuration: TouchGestureConfiguration(includesDiagonalSwipes: true))
-            if frame.cancelled { self.touchRecognizers.removeValue(forKey: frame.deviceID); self.blockedTouchDevices.insert(frame.deviceID); return }
             let samples = frame.activeContacts.map {
                 TouchSample(id: Int($0.id), location: GesturePoint(x: $0.x, y: $0.y))
             }
-            if let gesture = recognizer.process(frame: TouchFrame(timestamp: frame.timestamp, touches: samples)) {
+            if let gesture = self.touchSessions.process(deviceID: frame.deviceID,
+                                                       frame: TouchFrame(timestamp: frame.timestamp, touches: samples),
+                                                       cancelled: frame.cancelled) {
                 switch gesture {
                 case .tap(let fingers): self.diagnostics.recordRecognition("tap.\(fingers)")
                 case .swipe(let fingers, let direction): self.diagnostics.recordRecognition("swipe.\(fingers).\(direction.rawValue)")
@@ -68,16 +64,15 @@ final class EventEngine {
                 }
                 _ = self.fire(.touch(TouchGestureTrigger(gesture: gesture, modifiers: Self.modifiers(CGEventSource.flagsState(.combinedSessionState)), device: device.kind == .trackpad ? .trackpad : .mouse)))
             }
-            self.touchRecognizers[frame.deviceID] = recognizer
         }
-        touch.onReset = { [weak self] in self?.touchRecognizers.removeAll(); self?.blockedTouchDevices.removeAll() }
+        touch.onReset = { [weak self] in self?.touchSessions.reset() }
         touch.onStatus = { [weak self] status in self?.onTouchStatus?("\(status.message) · \(status.startedDevices)/\(status.enumeratedDevices) devices · \(status.receivedFrames) frames · \(status.rejectedFrames) rejected") }
         touch.onDevicesChanged = { [weak self] in self?.onTouchDevices?($0) }
         let center = NSWorkspace.shared.notificationCenter
         workspaceObservers.append(center.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] _ in
             guard let self else { return }
-            self.blockedTouchDevices.formUnion(self.touchRecognizers.keys)
-            self.touchRecognizers.removeAll()
+            self.foregroundGeneration &+= 1
+            self.touchSessions.interrupt(activeDeviceIDs: self.touch.invalidatePendingFrames())
             self.smoother.reset()
             self.cancelPending(); self.completeClicks(count: nil, replay: false)
         })
@@ -90,7 +85,8 @@ final class EventEngine {
 
     func configure(_ configuration: RuleBook) {
         configurationGeneration &+= 1; executor.cancelPending()
-        flushPending(); completeClicks(count: nil, replay: true); blockedTouchDevices.formUnion(touchRecognizers.keys); touchRecognizers.removeAll()
+        flushPending(); completeClicks(count: nil, replay: true)
+        touchSessions.interrupt(activeDeviceIDs: touch.invalidatePendingFrames())
         book = configuration; smoother.reset()
     }
     func start() {
@@ -122,7 +118,7 @@ final class EventEngine {
         if let tap { CGEvent.tapEnable(tap: tap, enable: false) }
         if let source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
         source = nil; tap = nil
-        touch.stop(); touchRecognizers.removeAll()
+        touch.stop(); touchSessions.reset()
         scrollTimer?.invalidate(); scrollTimer = nil; smoother.reset()
         swallowedKeys.removeAll(); discardedButton = nil; corner = nil; scrollSource = nil
         onStatus?("Paused / 已暂停")
@@ -272,8 +268,10 @@ final class EventEngine {
         }
         guard let rule = matches.first?.element, !rule.actions.isEmpty else { return false }
         let generation = configurationGeneration
+        let foreground = foregroundGeneration
         DispatchQueue.main.async { [weak self] in
-            guard let self, self.isRunning, self.configurationGeneration == generation else { return }
+            guard let self, self.isRunning, self.configurationGeneration == generation,
+                  self.foregroundGeneration == foreground else { return }
             self.onEvent?(rule.name); self.executor.execute(rule.actions, targetApplication: targetApplication)
         }
         return true

@@ -135,4 +135,151 @@ final class TouchGestureRecognizerTests: XCTestCase {
         XCTAssertNil(recognizer.process(frame: frame(0, [touch(1, 0.2)])))
         XCTAssertNil(recognizer.process(frame: frame(0.1, [])))
     }
+
+    func testEarlyOneFingerSwipeWaitsForThirdAndFourthFingers() {
+        var recognizer = TouchGestureRecognizer()
+        XCTAssertNil(recognizer.process(frame: frame(0, [touch(1, 0.1)])))
+        XCTAssertNil(recognizer.process(frame: frame(0.02, [touch(1, 0.25)])))
+        XCTAssertNil(recognizer.process(frame: frame(0.04, [touch(1, 0.25), touch(2, 0.4), touch(3, 0.55)])))
+        XCTAssertNil(recognizer.process(frame: frame(0.06, [touch(1, 0.25), touch(2, 0.4), touch(3, 0.55), touch(4, 0.7)])))
+        XCTAssertEqual(recognizer.process(frame: frame(0.1, [touch(1, 0.4), touch(2, 0.55), touch(3, 0.7), touch(4, 0.85)])),
+                       .swipe(fingers: 4, direction: .right))
+        XCTAssertNil(recognizer.process(frame: frame(0.12, [touch(4, 0.9)])))
+        XCTAssertNil(recognizer.process(frame: frame(0.14, [])))
+    }
+
+    func testEarlyTwoFingerSwipeDoesNotCommitBeforeThirdJoins() {
+        var recognizer = TouchGestureRecognizer()
+        _ = recognizer.process(frame: frame(0, [touch(1, 0.1), touch(2, 0.3)]))
+        XCTAssertNil(recognizer.process(frame: frame(0.02, [touch(1, 0.25), touch(2, 0.45)])))
+        XCTAssertNil(recognizer.process(frame: frame(0.04, [touch(1, 0.25), touch(2, 0.45), touch(3, 0.65)])))
+        // Each old contact already moved 0.15; the next 0.05 suffices without
+        // pretending the new finger also made the earlier movement.
+        XCTAssertEqual(recognizer.process(frame: frame(0.1, [touch(1, 0.3), touch(2, 0.5), touch(3, 0.7)])),
+                       .swipe(fingers: 3, direction: .right))
+    }
+
+    func testEarlyPinchIsDiscardedWhenThirdFingerJoins() {
+        var recognizer = TouchGestureRecognizer()
+        _ = recognizer.process(frame: frame(0, [touch(1, 0.4), touch(2, 0.6)]))
+        XCTAssertNil(recognizer.process(frame: frame(0.02, [touch(1, 0.35), touch(2, 0.65)])))
+        XCTAssertNil(recognizer.process(frame: frame(0.04, [touch(1, 0.35), touch(2, 0.65), touch(3, 0.8)])))
+        XCTAssertNil(recognizer.process(frame: frame(0.1, [touch(1, 0.35), touch(2, 0.65), touch(3, 0.8)])))
+        XCTAssertNil(recognizer.process(frame: frame(0.12, [])))
+    }
+
+    func testEarlyPinchCanBecomeFourFingerSwipe() {
+        var recognizer = TouchGestureRecognizer()
+        _ = recognizer.process(frame: frame(0, [touch(1, 0.3), touch(2, 0.5)]))
+        XCTAssertNil(recognizer.process(frame: frame(0.02, [touch(1, 0.25), touch(2, 0.55)])))
+        XCTAssertNil(recognizer.process(frame: frame(0.04, [touch(1, 0.25), touch(2, 0.55), touch(3, 0.65)])))
+        XCTAssertNil(recognizer.process(frame: frame(0.06, [touch(1, 0.25), touch(2, 0.55), touch(3, 0.65), touch(4, 0.75)])))
+        XCTAssertEqual(recognizer.process(frame: frame(0.1, [touch(1, 0.4), touch(2, 0.7), touch(3, 0.8), touch(4, 0.9)])),
+                       .swipe(fingers: 4, direction: .right))
+    }
+
+    func testJoinWindowEndpointStillAcceptsFingers() {
+        var recognizer = TouchGestureRecognizer()
+        _ = recognizer.process(frame: frame(0, [touch(1, 0.1)]))
+        XCTAssertNil(recognizer.process(frame: frame(0.08, [touch(1, 0.3)])))
+        XCTAssertNil(recognizer.process(frame: frame(0.08, [touch(1, 0.3), touch(2, 0.5)])))
+        XCTAssertEqual(recognizer.process(frame: frame(0.09, [touch(1, 0.35), touch(2, 0.55)])),
+                       .swipe(fingers: 2, direction: .right))
+    }
+
+    func testShortSwipeAndBothPinchesEmitAtAllUp() {
+        let cases: [([TouchSample], [TouchSample], TouchGesture)] = [
+            ([touch(1, 0.2)], [touch(1, 0.35)], .swipe(fingers: 1, direction: .right)),
+            ([touch(1, 0.4), touch(2, 0.6)], [touch(1, 0.35), touch(2, 0.65)], .pinch(.outward)),
+            ([touch(1, 0.3), touch(2, 0.7)], [touch(1, 0.4), touch(2, 0.6)], .pinch(.inward))
+        ]
+        for (start, moved, expected) in cases {
+            var recognizer = TouchGestureRecognizer()
+            XCTAssertNil(recognizer.process(frame: frame(0, start)))
+            XCTAssertNil(recognizer.process(frame: frame(0.02, moved)))
+            XCTAssertEqual(recognizer.process(frame: frame(0.04, [])), expected)
+            XCTAssertNil(recognizer.process(frame: frame(0.05, [])))
+        }
+    }
+
+    func testEarlyThresholdCrossingSurvivesReversalAndStaggeredRelease() {
+        var recognizer = TouchGestureRecognizer()
+        let start = [touch(1, 0.2), touch(2, 0.4), touch(3, 0.6)]
+        _ = recognizer.process(frame: frame(0, start))
+        XCTAssertNil(recognizer.process(frame: frame(0.02, [touch(1, 0.35), touch(2, 0.55), touch(3, 0.75)])))
+        XCTAssertNil(recognizer.process(frame: frame(0.03, start)))
+        XCTAssertNil(recognizer.process(frame: frame(0.04, [touch(2, 0.4), touch(3, 0.6)])))
+        XCTAssertNil(recognizer.process(frame: frame(0.1, [touch(3, 0.9)])))
+        XCTAssertEqual(recognizer.process(frame: frame(0.12, [])), .swipe(fingers: 3, direction: .right))
+    }
+
+    func testPendingSwipeIsNotCarriedAcrossInvalidContactChanges() {
+        let invalidChanges: [(Double, [TouchSample])] = [
+            (0.04, [touch(2, 0.4)]), // Replaced ID.
+            (0.1, [touch(1, 0.4), touch(2, 0.6)]), // Late join.
+            (0.04, [touch(1, 0.4), touch(1, 0.6)]), // Malformed duplicate.
+            (0.04, [touch(1, .nan)]),
+            (0.01, [touch(1, 0.4)]) // Backwards time.
+        ]
+        for (time, contacts) in invalidChanges {
+            var recognizer = TouchGestureRecognizer()
+            _ = recognizer.process(frame: frame(0, [touch(1, 0.2)]))
+            XCTAssertNil(recognizer.process(frame: frame(0.02, [touch(1, 0.4)])))
+            XCTAssertNil(recognizer.process(frame: frame(time, contacts)))
+            XCTAssertNil(recognizer.process(frame: frame(0.12, [])))
+            _ = recognizer.process(frame: frame(1, [touch(3, 0.5)]))
+            XCTAssertEqual(recognizer.process(frame: frame(1.1, [])), .tap(fingers: 1))
+        }
+    }
+
+    func testPendingGestureIsCancelledByRejoiningAfterReleaseOrReset() {
+        var recognizer = TouchGestureRecognizer()
+        let start = [touch(1, 0.2), touch(2, 0.4)]
+        _ = recognizer.process(frame: frame(0, start))
+        XCTAssertNil(recognizer.process(frame: frame(0.02, [touch(1, 0.4), touch(2, 0.6)])))
+        XCTAssertNil(recognizer.process(frame: frame(0.03, [touch(2, 0.6)])))
+        XCTAssertNil(recognizer.process(frame: frame(0.04, [touch(1, 0.4), touch(2, 0.6)])))
+        XCTAssertNil(recognizer.process(frame: frame(0.05, [])))
+        _ = recognizer.process(frame: frame(1, start))
+        XCTAssertNil(recognizer.process(frame: frame(1.02, [touch(1, 0.4), touch(2, 0.6)])))
+        recognizer.reset()
+        XCTAssertNil(recognizer.process(frame: frame(0, [])))
+    }
+
+    func testPendingGestureExpiresEvenWithoutIntermediateFrames() {
+        var recognizer = TouchGestureRecognizer()
+        _ = recognizer.process(frame: frame(0, [touch(1, 0.2)]))
+        XCTAssertNil(recognizer.process(frame: frame(0.02, [touch(1, 0.4)])))
+        XCTAssertNil(recognizer.process(frame: frame(3, [])))
+    }
+
+
+    func testDeferredSwipeCommitsAfterWindowWithoutLosingEarlyMotion() {
+        var recognizer = TouchGestureRecognizer()
+        _ = recognizer.process(frame: frame(0, [touch(1, 0.2)]))
+        XCTAssertNil(recognizer.process(frame: frame(0.02, [touch(1, 0.4)])))
+        XCTAssertEqual(recognizer.process(frame: frame(0.09, [touch(1, 0.2)])),
+                       .swipe(fingers: 1, direction: .right))
+        // Once committed, later contact churn cannot produce a second action.
+        XCTAssertNil(recognizer.process(frame: frame(0.1, [touch(2, 0.5), touch(3, 0.7)])))
+        XCTAssertNil(recognizer.process(frame: frame(0.12, [])))
+    }
+
+    func testStaggeredTwoFingerLandingDoesNotFabricatePinch() {
+        var recognizer = TouchGestureRecognizer()
+        _ = recognizer.process(frame: frame(0, [touch(1, 0.2)]))
+        XCTAssertNil(recognizer.process(frame: frame(0.02, [touch(1, 0.25)])))
+        XCTAssertNil(recognizer.process(frame: frame(0.04, [touch(1, 0.25), touch(2, 0.45)])))
+        XCTAssertNil(recognizer.process(frame: frame(0.09, [touch(1, 0.25), touch(2, 0.45)])))
+        XCTAssertEqual(recognizer.process(frame: frame(0.1, [touch(1, 0.2), touch(2, 0.5)])), .pinch(.outward))
+    }
+
+    func testShortJoinedSwipeUsesNewCohortAtRelease() {
+        var recognizer = TouchGestureRecognizer()
+        _ = recognizer.process(frame: frame(0, [touch(1, 0.1), touch(2, 0.3)]))
+        XCTAssertNil(recognizer.process(frame: frame(0.02, [touch(1, 0.3), touch(2, 0.5)])))
+        XCTAssertNil(recognizer.process(frame: frame(0.04, [touch(1, 0.3), touch(2, 0.5), touch(3, 0.7)])))
+        XCTAssertEqual(recognizer.process(frame: frame(0.05, [])), .swipe(fingers: 3, direction: .right))
+    }
+
 }
