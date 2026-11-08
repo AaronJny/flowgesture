@@ -232,6 +232,19 @@ private final class FlowGestureAppDelegate: NSObject, NSApplicationDelegate {
         settingsController?.window?.deminiaturize(nil)
         settingsController?.window?.makeKeyAndOrderFront(nil)
         settingsController?.window?.orderFrontRegardless()
+        if let window = settingsController?.window, !window.styleMask.contains(.fullScreen),
+           let screen = window.screen ?? NSScreen.main {
+            // SwiftUI's preferred size can exceed a small screen's usable area.
+            // Keep the entire settings frame above the Dock and below the menu bar.
+            window.contentView?.layoutSubtreeIfNeeded()
+            let visible = screen.visibleFrame
+            var frame = window.frame
+            frame.size.width = min(frame.width, visible.width)
+            frame.size.height = min(frame.height, visible.height)
+            frame.origin.x = min(max(frame.minX, visible.minX), visible.maxX - frame.width)
+            frame.origin.y = min(max(frame.minY, visible.minY), visible.maxY - frame.height)
+            if frame != window.frame { window.setFrame(frame, display: true) }
+        }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

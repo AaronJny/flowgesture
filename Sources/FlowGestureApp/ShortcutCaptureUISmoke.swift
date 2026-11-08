@@ -60,7 +60,8 @@ final class ShortcutCaptureUISmoke {
     private func click(identifier: String, completion: @escaping () -> Void) {
         pointerDiagnostics = "target=\(identifier); geometry not resolved"
         guard let window = settingsWindow, window.isVisible, !window.isMiniaturized,
-              let root = window.contentView, let mainScreen = NSScreen.screens.first else {
+              let root = window.contentView, let screen = window.screen,
+              let mainScreen = NSScreen.screens.first else {
             fail("no visible settings window for control click"); return
         }
         root.layoutSubtreeIfNeeded()
@@ -75,17 +76,21 @@ final class ShortcutCaptureUISmoke {
         }
         // SwiftUI's non-clipping host may report visibleRect outside the marker.
         let targetRect = marker.bounds.intersection(marker.visibleRect)
-        pointerDiagnostics = "target=\(identifier), bounds=\(marker.bounds), visible=\(marker.visibleRect), intersection=\(targetRect), windowFrame=\(window.frame), contentBounds=\(root.bounds), contentFrame=\(root.frame)"
+        pointerDiagnostics = "target=\(identifier), bounds=\(marker.bounds), visible=\(marker.visibleRect), intersection=\(targetRect), windowFrame=\(window.frame), contentBounds=\(root.bounds), contentFrame=\(root.frame), screenFrame=\(screen.frame), screenVisibleFrame=\(screen.visibleFrame)"
         guard !targetRect.isNull, targetRect.width > 0, targetRect.height > 0 else {
             fail("control is clipped outside its own bounds"); return
         }
         let inWindow = marker.convert(NSPoint(x: targetRect.midX, y: targetRect.midY), to: nil)
         let nativePoint = window.convertPoint(toScreen: inWindow)
         let point = CGPoint(x: nativePoint.x, y: mainScreen.frame.maxY - nativePoint.y)
-        pointerDiagnostics += ", windowPoint=\(inWindow), HIDPoint=\(point)"
+        pointerDiagnostics += ", windowPoint=\(inWindow), nativePoint=\(nativePoint), HIDPoint=\(point)"
         print("INFO: shortcut UI case=\(index + 1)/\(cases.count), stage=\(stage); \(pointerDiagnostics)")
         guard root.bounds.contains(root.convert(inWindow, from: nil)), window.frame.contains(nativePoint) else {
             fail("control point is outside settings content or window"); return
+        }
+        guard screen.frame.contains(nativePoint), screen.visibleFrame.contains(nativePoint),
+              screen.visibleFrame.contains(window.frame) else {
+            fail("control or settings window is outside usable screen area (Dock/menu bar)"); return
         }
         guard postMouse(type: .leftMouseDown, point: point) else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) {

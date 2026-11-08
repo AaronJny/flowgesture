@@ -88,7 +88,9 @@ struct RuleEditor: View {
                     .accessibilityIdentifier("flowgesture.rule.save")
                     .background { if ProcessInfo.processInfo.arguments.contains("--mouse-capture-ui-smoke") || ProcessInfo.processInfo.arguments.contains("--shortcut-ui-smoke") { SmokeControlGeometry(identifier: "flowgesture.rule.save") } }
             }.padding(.horizontal, 24).padding(.vertical, 16)
-        }.frame(minWidth: 900, idealWidth: 980, minHeight: 690, idealHeight: 740)
+        }
+        // Keep the footer reachable on small displays; the form above can scroll.
+        .frame(minWidth: 900, idealWidth: 980, minHeight: 600, idealHeight: 740)
     }
 
     private func mappingCard<Content: View>(number: String, title: String, @ViewBuilder content: () -> Content) -> some View {
