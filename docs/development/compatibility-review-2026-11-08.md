@@ -1,7 +1,7 @@
 # Daily-use compatibility review
 
 Reviewed baseline: `cc654e6` on `main`, following the v0.1.3 release.
-This is a source review and a local patch, not a new release or physical-device certification.
+This is a source review and an isolated test-branch implementation, not a new release or physical-device certification.
 
 ## Main functions and gaps
 
@@ -15,7 +15,7 @@ This is a source review and a local patch, not a new release or physical-device 
 | Actions | Shortcut, script, URL/app/file, menu, window and media/system actions | AX/Automation permissions, missing menus, sandbox/secure-input behavior and application-specific window support need a real macOS session. |
 | Device lifecycle | Device enumeration, separate identities, wake refresh, topology polling, bounded callback queue, isolated failed-device retries | Capture restart with fingers down, Bluetooth reconnect and simultaneous devices require physical testing. |
 | Configuration | Validation, import/export, backups, folder sync, bilingual settings | Corrupt/imported configs are guarded; simultaneous sync edits and actual UI interactions still need macOS acceptance. |
-| Distribution | macOS 13+, arm64/x86_64 packaging and macOS CI | Test-branch compilation and universal build passed on macOS 15.8.2; the full smoke suite and wider OS/hardware certification remain separate. |
+| Distribution | macOS 13+, arm64/x86_64 packaging and macOS CI | Full test-branch CI and universal build passed on macOS 15.8.2; wider OS/hardware certification remains separate. |
 
 ## Changes in this patch
 
@@ -49,8 +49,9 @@ modifier requirements.
 These are **potential overlaps**, not detected preferences. The editor explicitly
 states that assignments have not been checked and that modifiers/app scopes do
 not suppress macOS behavior. Users can choose another gesture, manually change a
-system assignment or accept coexistence. This patch does not read/write system
-preferences, seize devices, add private event constants or intercept new events.
+system assignment or accept coexistence. This guidance does not read/write system preferences or seize devices. The separate
+experimental decoder uses source-verified private fields, but remains disconnected
+from production event interception.
 
 ## Follow-up implementation
 
@@ -77,17 +78,29 @@ preferences, seize devices, add private event constants or intercept new events.
   No complete-stream capability profile is validated. See
   [the implementation contract and remaining activation gates](native-horizontal-arbitration.md).
 
+### Keep editor actions reachable on small displays
+
+The macOS 15 CI runner exposed a genuine layout failure after the test's old fixed
+click coordinates were replaced with native control geometry. A 690-point minimum
+editor content height produced a 718-point window on a 768-point screen. The Save
+control was positioned outside the usable screen area, and its click lost app
+focus instead of saving.
+
+The editor now permits a 600-point minimum height, keeps the footer fixed while
+the form scrolls, and constrains the settings window to the screen's visible
+frame. Shortcut UI checks require both the window and target point to fit that
+usable area. They still click actual Record and Save controls, require native
+capture ownership to end after key-up, and verify all three persisted shortcuts.
+No synthetic reactivation or skipped assertion masks a failed Save.
+
 ## Remaining acceptance priorities
 
-1. **Complete the full macOS smoke suite.** The environment catalog has no interactive Mac,
-   and there are no saved cloud configurations. The isolated test branch
-   `dot/touch-compatibility-20261108` is now pushed with explicit approval.
-   Its first CI run was cancelled before execution because the configured
-   `macos-14-arm64-us-default` runner is no longer supported. After moving CI to
-   `macos-15`, native tests, 185 Swift tests, the universal app build and launch
-   smoke passed. The foreground smoke then failed at its fixed-coordinate
-   pause-control click; use actual control geometry and retain the input-protection
-   assertion rather than skipping the check.
+1. **Retain the full macOS CI gate.** The isolated branch
+   `dot/touch-compatibility-20261108` was pushed with explicit approval. The old
+   macOS 14 runner was retired, so CI now uses `macos-15`. Actual native control
+   geometry replaced brittle fixed-coordinate clicks; that revealed and led to
+   fixing the small-screen Save defect above. The complete suite now passes.
+   The environment catalog still has no interactive Mac or saved Mac configuration.
 2. **Verify production fixes physically.** Exercise app/config changes during
    callback backlog, short/fast gestures, mixed devices, and real start failures.
 3. **Complete native-gesture arbitration.** Follow the existing
@@ -107,16 +120,26 @@ preferences, seize devices, add private event constants or intercept new events.
 - ASan/UBSan native run: passed with `ASAN_OPTIONS=detect_leaks=0 SANITIZE=1`.
   The initial leak-enabled run failed because LeakSanitizer does not support the
   environment's ptrace setup. Leak checking is therefore **not** validated.
-- macOS CI at `4d1911f1292edd1eb6f805f6e80237b97c1e576f`: **185 Swift tests
-  passed**, native tests passed, universal arm64/x86_64 app/DMG build passed,
-  settings launch and close/reopen smoke passed. The subsequent foreground-rule
-  smoke failed at the pause-control click, so this is **not an overall CI pass**.
-  [Run evidence](https://github.com/AaronJny/flowgesture/actions/runs/42487472879).
-  Later smoke, UI image and install-image stages were skipped in that run.
+- Full macOS 15.8.2 / Swift 6.1.2 CI at
+  `3cee9b4942481b9c0fdde1d216d49490c938f5b2`: **SUCCESS, all steps passed**.
+  [Run evidence](https://github.com/AaronJny/flowgesture/actions/runs/42489465736).
+  This includes native tests, **185 Swift tests with zero failures**, universal
+  arm64/x86_64 app build, launch/reopen, foreground mappings and pause, full-screen
+  gesture, native shortcut capture, actual three-shortcut Record/Save persistence,
+  click/draw/shape mouse Record/Cancel/Record/Save and Codable round trips, and
+  install-image verification before and after artifact upload/download. DMGs were
+  mounted read-only, copied to simulate drag installation, and launched.
+- All six CI fixture screenshots were visually inspected, including Chinese
+  trackpad and English Magic Mouse advice. The 980×681 window fits the runner's
+  usable screen frame; Save is reachable and the form content scrolls above a
+  fixed footer. This is not a physical-device or accessibility audit.
+- Earlier failed runs remain useful evidence: retired runner, obsolete fixed
+  click coordinates, then a real oversized editor. No failing assertion was
+  skipped to obtain the successful result.
 - Hardware, permissions, native overlap outcomes and app compatibility: **not
   tested**. No native suppression claim is made.
 
-Before release, run the complete development/CI checks on macOS. Then reproduce
+Before release, keep the complete development/CI checks passing on macOS. Reproduce
 the idle and mid-contact app/configuration changes on built-in and external
 trackpads and Magic Mouse, verify two-device isolation, and check the advice in
 English and Chinese at the minimum editor size. Touch-editor screenshots are now
