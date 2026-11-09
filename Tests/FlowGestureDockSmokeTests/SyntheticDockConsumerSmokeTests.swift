@@ -156,23 +156,88 @@ final class SyntheticDockConsumerSmokeTests: XCTestCase {
         let packet = try XCTUnwrap(DockSmokeFixture.prepare(name: "unposted", direction: .right,
             mode: .consume, tags: [31, 32, 33]).packets.first)
         XCTAssertTrue(DockSmokeFixture.Fields(packet.event).matchesPayload(packet.posted))
-        let integerFields: [CGEventField] = [.eventSourceUnixProcessID, .eventSourceUserData,
-            CGEventField(rawValue: 55)!, CGEventField(rawValue: 110)!, CGEventField(rawValue: 123)!, CGEventField(rawValue: 132)!]
-        for field in integerFields {
-            let copy = try XCTUnwrap(packet.event.copy())
-            copy.setIntegerValueField(field, value: copy.getIntegerValueField(field) + 1)
-            XCTAssertFalse(DockSmokeFixture.Fields(copy).matchesPayload(packet.posted))
+
+        // Every payload guard is exercised with an explicit value snapshot,
+        // independent of which private/source CGEvent setters Quartz honors.
+        typealias Fields = DockSmokeFixture.Fields
+        let baseline = packet.posted
+        XCTAssertEqual(Fields(syntheticCopying: baseline), baseline)
+        let replacements: [(String, Fields)] = [
+            ("eventType", Fields(syntheticCopying: baseline, eventType: 31)),
+            ("sourceTag", Fields(syntheticCopying: baseline, tag: baseline.tag + 1)),
+            ("sourcePID", Fields(syntheticCopying: baseline, pid: baseline.pid + 1)),
+            ("selector55", Fields(syntheticCopying: baseline, selector: 31)),
+            ("hidType110", Fields(syntheticCopying: baseline, hidType: 24)),
+            ("axis123", Fields(syntheticCopying: baseline, axis: 2)),
+            ("phase132", Fields(syntheticCopying: baseline, phase: 2)),
+            ("progress124", Fields(syntheticCopying: baseline, progress: baseline.progress.nextUp)),
+            ("velocityX129", Fields(syntheticCopying: baseline, velocityX: baseline.velocityX.nextUp)),
+            ("velocityY130", Fields(syntheticCopying: baseline, velocityY: baseline.velocityY.nextUp)),
+            ("nonfinite progress", Fields(syntheticCopying: baseline, progress: .nan)),
+            ("nonfinite velocityX", Fields(syntheticCopying: baseline, velocityX: .infinity)),
+            ("nonfinite velocityY", Fields(syntheticCopying: baseline, velocityY: -.infinity))
+        ]
+        for (name, replaced) in replacements {
+            print("Pure synthetic snapshot replacement \(name): before=\(baseline), after=\(replaced)")
+            XCTAssertNotEqual(replaced, baseline, "negative snapshot must differ: \(name)")
+            XCTAssertFalse(replaced.matchesPayload(baseline), "strict payload guard: \(name)")
         }
-        for raw in [UInt32(124), 129, 130] {
+
+        // These setters are diagnostic only. An ignored write is not a matcher
+        // failure; the pure replacements above cover each guard either way.
+        let diagnosticFields: [(String, CGEventField)] = [("sourcePID", .eventSourceUnixProcessID),
+            ("selector", CGEventField(rawValue: 55)!), ("hidType", CGEventField(rawValue: 110)!),
+            ("axis", CGEventField(rawValue: 123)!)]
+        for (name, field) in diagnosticFields {
+            let copy = try XCTUnwrap(packet.event.copy())
+            let before = copy.getIntegerValueField(field)
+            copy.setIntegerValueField(field, value: before + 1)
+            let after = copy.getIntegerValueField(field)
+            let diagnostic = "\(name) field=\(field.rawValue) before=\(before) requested=\(before + 1) after=\(after)"
+            print("Unposted observational setter diagnostic \(diagnostic)")
+            if after != before {
+                XCTAssertFalse(Fields(copy).matchesPayload(baseline), diagnostic)
+            }
+        }
+        // Only independently observed writable fields are API mutation fixtures.
+        // Began (1) changes to valid changed (2), rather than an arbitrary phase.
+        let integerFields: [(String, CGEventField)] = [("sourceTag", .eventSourceUserData),
+            ("phase", CGEventField(rawValue: 132)!)]
+        for (name, field) in integerFields {
+            let copy = try XCTUnwrap(packet.event.copy())
+            let before = copy.getIntegerValueField(field)
+            copy.setIntegerValueField(field, value: before + 1)
+            let after = copy.getIntegerValueField(field)
+            let diagnostic = "\(name) field=\(field.rawValue) before=\(before) requested=\(before + 1) after=\(after)"
+            print("Unposted setter diagnostic \(diagnostic)")
+            XCTAssertNotEqual(after, before, "negative fixture was not changed: \(diagnostic)")
+            guard after != before else { continue }
+            XCTAssertFalse(DockSmokeFixture.Fields(copy).matchesPayload(packet.posted), diagnostic)
+        }
+        for (name, raw) in [("progress", UInt32(124)), ("velocityX", 129), ("velocityY", 130)] {
             let copy = try XCTUnwrap(packet.event.copy())
             let field = try XCTUnwrap(CGEventField(rawValue: raw))
+            let before = copy.getDoubleValueField(field)
             copy.setDoubleValueField(field, value: 0)
-            XCTAssertFalse(DockSmokeFixture.Fields(copy).matchesPayload(packet.posted))
+            let after = copy.getDoubleValueField(field)
+            let diagnostic = "\(name) field=\(raw) before=\(String(format: "%.17g", before)) requested=0 after=\(String(format: "%.17g", after))"
+            print("Unposted setter diagnostic \(diagnostic)")
+            XCTAssertNotEqual(after, before, "negative fixture was not changed: \(diagnostic)")
+            guard after != before else { continue }
+            XCTAssertFalse(DockSmokeFixture.Fields(copy).matchesPayload(packet.posted), diagnostic)
         }
         let adjacentProgress = try XCTUnwrap(packet.event.copy())
-        adjacentProgress.setDoubleValueField(CGEventField(rawValue: 124)!,
-            value: Double(Float(packet.posted.progress).nextUp))
-        XCTAssertFalse(DockSmokeFixture.Fields(adjacentProgress).matchesPayload(packet.posted),
-                       "transport comparison must not round or allow nearby progress values")
+        let progressField = try XCTUnwrap(CGEventField(rawValue: 124))
+        let requestedProgress = Double(Float(packet.posted.progress).nextUp)
+        adjacentProgress.setDoubleValueField(progressField, value: requestedProgress)
+        let observedProgress = adjacentProgress.getDoubleValueField(progressField)
+        let progressDiagnostic = "adjacent progress field=124 before=\(String(format: "%.17g", packet.posted.progress)) requested=\(String(format: "%.17g", requestedProgress)) after=\(String(format: "%.17g", observedProgress))"
+        print("Unposted setter diagnostic \(progressDiagnostic)")
+        XCTAssertNotEqual(observedProgress, packet.posted.progress, "negative fixture was not changed: \(progressDiagnostic)")
+        if observedProgress != packet.posted.progress {
+            XCTAssertFalse(DockSmokeFixture.Fields(adjacentProgress).matchesPayload(packet.posted),
+                           "transport comparison must not allow nearby progress values: \(progressDiagnostic)")
+        }
+        XCTAssertEqual(DockSmokeFixture.Fields(packet.event), packet.posted, "the real unposted fixture remains unchanged")
     }
 }

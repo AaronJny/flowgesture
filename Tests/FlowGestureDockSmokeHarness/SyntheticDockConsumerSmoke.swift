@@ -77,6 +77,25 @@ enum DockSmokeFixture {
             velocityX = event.getDoubleValueField(CGEventField(rawValue: 129)!)
             velocityY = event.getDoubleValueField(CGEventField(rawValue: 130)!)
         }
+        /// A pure negative-fixture snapshot, never a CGEvent mutation or a source
+        /// of callback observations. Tests must not assume Quartz honors setters
+        /// for every private field. Real observations always use init(CGEvent).
+        init(syntheticCopying snapshot: Fields, eventType: UInt32? = nil,
+             tag: Int64? = nil, pid: Int64? = nil, selector: Int64? = nil,
+             hidType: Int64? = nil, axis: Int64? = nil, phase: Int64? = nil,
+             progress: Double? = nil, velocityX: Double? = nil, velocityY: Double? = nil) {
+            self.eventType = eventType ?? snapshot.eventType
+            self.tag = tag ?? snapshot.tag
+            self.pid = pid ?? snapshot.pid
+            flags = snapshot.flags
+            self.selector = selector ?? snapshot.selector
+            self.hidType = hidType ?? snapshot.hidType
+            self.axis = axis ?? snapshot.axis
+            self.phase = phase ?? snapshot.phase
+            self.progress = progress ?? snapshot.progress
+            self.velocityX = velocityX ?? snapshot.velocityX
+            self.velocityY = velocityY ?? snapshot.velocityY
+        }
         func matchesPayload(_ posted: Fields) -> Bool {
             // Flags are separately calibrated using the first forward-only round.
             eventType == posted.eventType && tag == posted.tag && pid == posted.pid &&
