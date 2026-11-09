@@ -19,6 +19,7 @@ final class NativeHorizontalSwipeDecoderTests: XCTestCase {
         XCTAssertEqual(decoded.senderRegistryID, 42)
         XCTAssertEqual(decoded.progress, 0.25)
         XCTAssertEqual(decoded.velocityX, 100)
+        XCTAssertEqual(decoded.sourceProvenance, .unverified)
     }
 
     func testSelectorMismatchAndPublicEventsAreRejected() throws {

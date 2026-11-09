@@ -169,7 +169,7 @@ private final class FlowGestureAppDelegate: NSObject, NSApplicationDelegate {
         let args = ProcessInfo.processInfo.arguments
         let mode: String
         if let i = args.firstIndex(of: "--mouse-capture-ui-smoke"), args.indices.contains(i + 1) { mode = args[i + 1] }
-        else { mode = "draw" }
+        else { mode = args.contains("--ui-review-shape") ? "shape" : "draw" }
         let modifiers: ModifierKeys = [.control, .shift]
         let trigger: InputTrigger
         switch mode {
@@ -185,7 +185,7 @@ private final class FlowGestureAppDelegate: NSObject, NSApplicationDelegate {
     func showSettings() {
         if settingsController == nil {
             let root: AnyView
-            if ProcessInfo.processInfo.arguments.contains("--mouse-capture-ui-smoke") || ProcessInfo.processInfo.arguments.contains("--ui-review-draw") {
+            if ProcessInfo.processInfo.arguments.contains("--mouse-capture-ui-smoke") || ProcessInfo.processInfo.arguments.contains("--ui-review-draw") || ProcessInfo.processInfo.arguments.contains("--ui-review-shape") {
                 runtime.model.language = .english
                 root = AnyView(RuleEditor(rule: mouseCaptureFixture(), onSave: { rule in
                     guard self.runtime.model.saveRule(rule) else { return false }

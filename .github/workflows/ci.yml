@@ -37,6 +37,7 @@ jobs:
           build/FlowGesture.app/Contents/MacOS/FlowGesture --ui-review-screenshot "$PWD/build/ui-review/scrolling.png" --ui-review-scrolling
           build/FlowGesture.app/Contents/MacOS/FlowGesture --ui-review-screenshot "$PWD/build/ui-review/manual-shortcut.png" --ui-review-manual-shortcut
           build/FlowGesture.app/Contents/MacOS/FlowGesture --ui-review-screenshot "$PWD/build/ui-review/draw-capture.png" --ui-review-draw
+          build/FlowGesture.app/Contents/MacOS/FlowGesture --ui-review-screenshot "$PWD/build/ui-review/shape-capture.png" --ui-review-shape
           build/FlowGesture.app/Contents/MacOS/FlowGesture --ui-review-screenshot "$PWD/build/ui-review/touch-trackpad-zh.png" --ui-review-touch
           build/FlowGesture.app/Contents/MacOS/FlowGesture --ui-review-screenshot "$PWD/build/ui-review/touch-mouse-en.png" --ui-review-touch-mouse --ui-review-english
       - name: Test mappings while FlowGesture is foreground

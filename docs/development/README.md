@@ -57,8 +57,15 @@ from input rules so settings remain usable.
 
 ## CI storage
 
-Only the app DMG is uploaded, retained for seven days.
+CI runs macOS 15 on ARM64 and Intel, plus macOS 26 on ARM64. Each job uploads its
+app DMG for seven days and controlled UI fixture screenshots for three days.
+These jobs validate software execution, not physical gesture suppression.
 The uploaded image is downloaded again, byte-compared, verified, mounted read-only,
 then its copied app is signature/architecture-checked and launched.
-Concurrency cancels superseded runs on the same ref. Historical run/artifact
+Artifact names include the runner label so parallel jobs cannot overwrite one
+another. Concurrency cancels superseded runs on the same ref. Historical run/artifact
 deletion is not automatic; useful diagnostic logs and the current build are retained.
+
+The [no-connection verification route](no-connection-verification.md) distinguishes
+synthetic replay, external browser fixtures, cloud CI, and optional self-run checks.
+It does not require remote access to a personal computer.

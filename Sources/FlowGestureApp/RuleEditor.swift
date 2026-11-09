@@ -323,16 +323,10 @@ private struct ShapeTriggerEditor: View {
             GeometryReader { geometry in
                 ZStack {
                     RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .textBackgroundColor))
-                    Canvas { context, size in
-                        let points = recording && !stroke.isEmpty ? stroke : previewPoints(in: size)
-                        guard let first = points.first else { return }
-                        var path = Path()
-                        path.move(to: CGPoint(x: first.x, y: Double(size.height) - first.y))
-                        for point in points.dropFirst() { path.addLine(to: CGPoint(x: point.x, y: Double(size.height) - point.y)) }
-                        context.stroke(path, with: .color(recording ? .orange : .accentColor), style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
-                        let start = CGRect(x: first.x - 5, y: Double(size.height) - first.y - 5, width: 10, height: 10)
-                        context.fill(Path(ellipseIn: start), with: .color(.green))
-                    }
+                    ShapeStrokePreview(points: recording && !stroke.isEmpty ? stroke : previewPoints(in: geometry.size), isRecording: recording)
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
                     if !recording && value.points.isEmpty {
                         Text(model.t("Record a shape, then draw one continuous stroke here.")).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center).padding()
                     }

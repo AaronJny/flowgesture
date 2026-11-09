@@ -12,7 +12,8 @@ enum NativeHorizontalSwipeDecoder {
     static let velocityXField: UInt32 = 129
     static let phaseField: UInt32 = 132
 
-    static func decode(type: CGEventType, event: CGEvent, senderRegistryID: UInt64?) -> NativeHorizontalSwipeEvent? {
+    static func decode(type: CGEventType, event: CGEvent, senderRegistryID: UInt64?,
+                       sourceProvenance: NativeHorizontalSwipeEvent.SourceProvenance = .unverified) -> NativeHorizontalSwipeEvent? {
         guard type.rawValue == 29 || type.rawValue == 30,
               let selector = CGEventField(rawValue: selectorField),
               let hidType = CGEventField(rawValue: hidTypeField),
@@ -28,6 +29,7 @@ enum NativeHorizontalSwipeDecoder {
                                           senderRegistryID: senderRegistryID,
                                           sourcePID: event.getIntegerValueField(.eventSourceUnixProcessID),
                                           progress: event.getDoubleValueField(progress),
-                                          velocityX: event.getDoubleValueField(velocity))
+                                          velocityX: event.getDoubleValueField(velocity),
+                                          sourceProvenance: sourceProvenance)
     }
 }

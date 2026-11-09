@@ -8,9 +8,23 @@ final class NativeHorizontalSwipeArbitratorTests: XCTestCase {
     private let eligible = A.Eligibility(senderRegistryID: 42, leftActionID: "left", rightActionID: "right", wholeFamilyEligible: true)
     private func event(_ phase: Int64, sender: UInt64? = 42, progress: Double = 0,
                        velocity: Double = 0, kind: Int64 = 30, hid: Int64 = 23,
-                       axis: Int64 = 1, pid: Int64 = 0) -> NativeHorizontalSwipeEvent {
+                       axis: Int64 = 1, pid: Int64 = 0,
+                       provenance: NativeHorizontalSwipeEvent.SourceProvenance = .independentlyVerifiedPhysical) -> NativeHorizontalSwipeEvent {
+        // Synthetic value fixture explicitly simulates source evidence. This is
+        // not an observed hardware event or validation of a real capability.
         .init(eventClass: kind, hidType: hid, axis: axis, phase: phase, senderRegistryID: sender,
-              sourcePID: pid, progress: progress, velocityX: velocity)
+              sourcePID: pid, progress: progress, velocityX: velocity, sourceProvenance: provenance)
+    }
+    func testPIDZeroDoesNotEstablishPhysicalOrigin() {
+        var a = A()
+        let unknown = a.process(event(1, provenance: .unverified), gate: gate, eligibility: eligible)
+        XCTAssertFalse(unknown.consume)
+        XCTAssertTrue(unknown.requiresIdleReset)
+        XCTAssertFalse(a.process(event(1), gate: gate, eligibility: eligible).consume)
+        a.resetAfterVerifiedIdle()
+        let token = a.process(event(1), gate: gate, eligibility: eligible).ownership!
+        XCTAssertTrue(a.process(event(2, progress: 1, provenance: .unverified), gate: gate, eligibility: eligible).requiresIdleReset)
+        XCTAssertFalse(a.isCurrent(token))
     }
     func testDefaultAndMismatchedGateNeverClaim() {
         for g in [A.TestGate(), A.TestGate(explicitlyEnabled: true, runningOSBuild: "new",
