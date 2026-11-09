@@ -64,17 +64,9 @@ jobs:
           - 修复切换应用后首次触控手势丢失，改善快速多指手势识别和设备启动失败后的恢复。
           - 修复 Intel 上自由形状预览崩溃，以及小屏幕上保存按钮不可见的问题。
 
-          macOS 15（Apple Silicon / Intel）与 macOS 26（Apple Silicon）各 196 项测试通过，安装包已完成下载、安装及启动验证。
-          已知限制：本版不拦截 macOS 原生手势，系统手势双重触发尚未解决。真实触控设备未完成验证。
-          下载 `FlowGesture-macos.dmg`。最低要求 macOS 13；通用二进制支持 Apple Silicon 与 Intel。应用使用 ad-hoc 签名，未做 Apple 公证。
-
           ## FlowGesture 0.1.4
           - Fix the first touch gesture being lost after switching apps; improve quick multi-finger recognition and recovery from device-start failures.
           - Fix the Intel free-form preview crash and keep Save accessible on small displays.
-
-          All 196 tests pass on each of macOS 15 (Apple Silicon / Intel) and macOS 26 (Apple Silicon), with downloaded-image installation and launch checks.
-          Known limitation: native macOS gestures are not suppressed, so duplicate system/custom actions remain unresolved. Physical touch devices have not been validated.
-          Download `FlowGesture-macos.dmg`. Requires macOS 13 or later; universal Apple Silicon / Intel binary. Ad-hoc signed, not notarized by Apple.
           NOTES
           gh api --method POST "repos/$GH_REPO/git/refs" -f ref="refs/tags/$VERSION" -f sha="$TARGET" > /dev/null
           gh release create "$VERSION" release/FlowGesture-macos.dmg release/SHA256SUMS.txt --repo "$GH_REPO" --target "$TARGET" --verify-tag --title 'FlowGesture 0.1.4 · 行云手势' --notes-file release-notes.md --draft
