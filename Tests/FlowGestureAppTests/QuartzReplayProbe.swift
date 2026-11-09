@@ -10,6 +10,40 @@ import FlowGestureCore
 final class QuartzReplayProbe {
     typealias Coordinator = NativeRawGestureCoordinator
     enum Stage: String, Codable { case head, admission, tail }
+    enum LifecyclePhase: String, Codable {
+        case running, awaitingDisabledNotification, disabledConfirmed, reenabling, teardown, failed
+    }
+    struct DisableRequest {
+        let tapID: String
+        let generation: Int
+        let requestedUptime: Double
+        let deadlineUptime: Double
+
+        func accepts(type: CGEventType, stage: Stage, tapID: String, generation: Int,
+                     phase: LifecyclePhase, isEnabled: Bool?, uptime: Double) -> Bool {
+            type == .tapDisabledByUserInput && stage == .admission && self.tapID == tapID &&
+                self.generation == generation && phase == .awaitingDisabledNotification &&
+                isEnabled == false && uptime >= requestedUptime && uptime <= deadlineUptime
+        }
+    }
+    struct DisabledNotification: Codable {
+        let tapID: String
+        let generation: Int
+        let stage: Stage
+        let callbackType: UInt32
+        let phase: LifecyclePhase
+        let isEnabled: Bool?
+        let uptime: Double
+        let lastFixtureOrdinal: Int
+        let requestedUptime: Double?
+        let expected: Bool
+    }
+    struct LifecycleTransition: Codable {
+        let phase: LifecyclePhase
+        let uptime: Double
+        let tapID: String?
+        let generation: Int
+    }
 
     struct FixtureFields: Codable, Equatable {
         let flagsRawValue: UInt64
@@ -41,7 +75,7 @@ final class QuartzReplayProbe {
         let sourcePID: Int64
     }
     struct Report: Codable {
-        let schemaVersion = 3
+        let schemaVersion = 4
         let evidenceScope = "synthetic-public-scroll-transport-only"
         let privateGesturePacketsPosted = false
         let provesPhysicalGestureSuppression = false
@@ -62,6 +96,8 @@ final class QuartzReplayProbe {
         var tapGenerations = 0
         var invalidatedTaps = 0
         var transportEnvelopes: [TransportEnvelope] = []
+        var disabledNotifications: [DisabledNotification] = []
+        var lifecycleTransitions: [LifecycleTransition] = []
     }
     struct Failure: Error, CustomStringConvertible {
         let description: String
@@ -101,7 +137,11 @@ final class QuartzReplayProbe {
     private final class TapContext {
         unowned let owner: QuartzReplayProbe
         let stage: Stage
-        init(owner: QuartzReplayProbe, stage: Stage) { self.owner = owner; self.stage = stage }
+        let tapID = UUID().uuidString
+        let generation: Int
+        init(owner: QuartzReplayProbe, stage: Stage, generation: Int) {
+            self.owner = owner; self.stage = stage; self.generation = generation
+        }
     }
     private struct Tap {
         let port: CFMachPort
@@ -116,6 +156,8 @@ final class QuartzReplayProbe {
     private var fixtures: [Int64: Int] = [:]
     private var admissions: [Int64: Admission] = [:]
     private var transportEnvelope: TransportEnvelope?
+    private var lifecyclePhase: LifecyclePhase = .running
+    private var disableRequest: DisableRequest?
     private var ordinal = 0
     private var deadline = 0.0
     private let source: CGEventSource
@@ -168,13 +210,26 @@ final class QuartzReplayProbe {
             guard let active = taps.first(where: { $0.context.stage == .admission }) else {
                 throw Failure("active tap was not installed")
             }
+            let requestedAt = ProcessInfo.processInfo.systemUptime
+            disableRequest = DisableRequest(tapID: active.context.tapID, generation: active.context.generation,
+                                            requestedUptime: requestedAt, deadlineUptime: min(deadline, requestedAt + 2))
+            transition(to: .awaitingDisabledNotification, tap: active.context)
             CGEvent.tapEnable(tap: active.port, enable: false)
             try require(!CGEvent.tapIsEnabled(tap: active.port), "active tap did not disable")
             let disabled = try Admission()
             try send("disabled-tap-forwards", admission: disabled, bypass: true)
             try require(disabled.count == 0, "disabled tap admitted an action")
+            try awaitExpectedDisableNotification()
+            try drainAndValidate()
+            try require(lifecyclePhase == .disabledConfirmed && report.failures.isEmpty &&
+                        !CGEvent.tapIsEnabled(tap: active.port), "planned re-enable lacks confirmed disabled control")
+            transition(to: .reenabling, tap: active.context)
+            // This is the single explicitly planned lifecycle step, never an
+            // automatic response to a timeout or an unexpected disable callback.
+            disableRequest = nil
             CGEvent.tapEnable(tap: active.port, enable: true)
             try require(CGEvent.tapIsEnabled(tap: active.port), "active tap did not re-enable")
+            transition(to: .running, tap: active.context)
             try send("re-enabled-tap-consumes", admission: disabled, consumed: true)
             try send("re-enabled-forward-sentinel")
             try drainAndValidate()
@@ -191,6 +246,7 @@ final class QuartzReplayProbe {
             try require(report.admittedHarmlessCounters == 3, "unexpected total harmless admission count")
             stop()
             try require(report.invalidatedTaps == 6 && taps.isEmpty, "final tap teardown was incomplete")
+            try require(report.failures.isEmpty, "tap notification failed during teardown")
             report.status = "passed"
         } catch {
             stop()
@@ -220,14 +276,15 @@ final class QuartzReplayProbe {
         try addTap(stage: .admission, place: .headInsertEventTap, options: .defaultTap)
         try addTap(stage: .head, place: .headInsertEventTap, options: .listenOnly)
         report.tapGenerations += 1
+        transition(to: .running)
     }
 
     private func addTap(stage: Stage, place: CGEventTapPlacement, options: CGEventTapOptions) throws {
-        let context = TapContext(owner: self, stage: stage)
+        let context = TapContext(owner: self, stage: stage, generation: report.tapGenerations + 1)
         let callback: CGEventTapCallBack = { _, type, event, opaque in
             guard let opaque else { return Unmanaged.passUnretained(event) }
             let context = Unmanaged<TapContext>.fromOpaque(opaque).takeUnretainedValue()
-            return context.owner.receive(stage: context.stage, type: type, event: event)
+            return context.owner.receive(context: context, type: type, event: event)
         }
         let mask = CGEventMask(1) << CGEventType.scrollWheel.rawValue
         guard let port = CGEvent.tapCreate(tap: .cgSessionEventTap, place: place, options: options,
@@ -248,6 +305,8 @@ final class QuartzReplayProbe {
 
     private func stop() {
         transportEnvelope = nil
+        disableRequest = nil
+        transition(to: .teardown)
         // Never re-enable a tap after an OS timeout. No cancellation/repair event is posted.
         for tap in taps {
             CGEvent.tapEnable(tap: tap.port, enable: false)
@@ -259,10 +318,51 @@ final class QuartzReplayProbe {
         taps.removeAll()
     }
 
-    private func receive(stage: Stage, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+    private func transition(to phase: LifecyclePhase, tap: TapContext? = nil) {
+        lifecyclePhase = phase
+        report.lifecycleTransitions.append(LifecycleTransition(phase: phase,
+            uptime: ProcessInfo.processInfo.systemUptime, tapID: tap?.tapID,
+            generation: tap?.generation ?? report.tapGenerations))
+    }
+
+    private func awaitExpectedDisableNotification() throws {
+        guard let request = disableRequest else { throw Failure("no planned disable request") }
+        while lifecyclePhase == .awaitingDisabledNotification && report.failures.isEmpty &&
+                ProcessInfo.processInfo.systemUptime < request.deadlineUptime {
+            CFRunLoopRunInMode(.defaultMode, 0.01, false)
+        }
+        try require(report.failures.isEmpty && lifecyclePhase == .disabledConfirmed,
+                    "planned disable notification was absent, late or unexpected; no re-enable attempted")
+    }
+
+    private func receive(context: TapContext, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        let stage = context.stage
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            report.failures.append("\(stage.rawValue) tap disabled by OS (type \(type.rawValue)); experiment failed")
-            for admission in admissions.values { admission.coordinator.interrupt() }
+            let uptime = ProcessInfo.processInfo.systemUptime
+            let port = taps.first { $0.context.tapID == context.tapID }?.port
+            let enabled = port.map { CGEvent.tapIsEnabled(tap: $0) }
+            let expected = disableRequest?.accepts(type: type, stage: stage, tapID: context.tapID,
+                generation: context.generation, phase: lifecyclePhase, isEnabled: enabled, uptime: uptime) ?? false
+            // Apple distinguishes the two callback types. In this probe only a
+            // matching user-input notification inside our explicit disable window
+            // is expected. The observed correlation is not a universal API promise.
+            // https://developer.apple.com/documentation/coregraphics/cgeventtype
+            // https://developer.apple.com/documentation/coregraphics/cgevent/tapenable(tap:enable:)
+            if report.disabledNotifications.count < 32 {
+                report.disabledNotifications.append(DisabledNotification(tapID: context.tapID,
+                    generation: context.generation, stage: stage, callbackType: type.rawValue,
+                    phase: lifecyclePhase, isEnabled: enabled, uptime: uptime, lastFixtureOrdinal: ordinal,
+                    requestedUptime: disableRequest?.requestedUptime, expected: expected))
+            } else {
+                report.failures.append("disabled-notification evidence exceeded its bounded capacity")
+            }
+            if expected && report.failures.isEmpty {
+                transition(to: .disabledConfirmed, tap: context)
+            } else {
+                report.failures.append("unexpected \(stage.rawValue) disable notification (type \(type.rawValue), phase \(lifecyclePhase.rawValue)); no automatic recovery")
+                transition(to: .failed, tap: context)
+                for admission in admissions.values { admission.coordinator.interrupt() }
+            }
             return Unmanaged.passUnretained(event)
         }
         let tag = event.getIntegerValueField(.eventSourceUserData)

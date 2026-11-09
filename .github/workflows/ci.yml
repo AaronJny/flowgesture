@@ -120,6 +120,25 @@ jobs:
         env:
           FLOWGESTURE_RUN_CAPTURE_CAPABILITY: '1'
         run: bash scripts/probe-passive-capture-capability.sh
+      - name: Test read-only console diagnostic without hardware
+        if: always()
+        run: bash scripts/test-console-session-probe.sh
+      - name: Observe current runner console-state fields
+        if: always()
+        env:
+          FLOWGESTURE_RUN_CONSOLE_SESSION_PROBE: '1'
+          FLOWGESTURE_PROBE_SOURCE_REVISION: ${{ github.sha }}
+        run: |
+          mkdir -p build/console-session-probe
+          swift scripts/probe-console-session.swift --probe > build/console-session-probe/report.json
+      - name: Upload bounded current-session diagnostic
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: FlowGesture-console-session-probe-${{ matrix.os }}
+          path: build/console-session-probe/report.json
+          if-no-files-found: warn
+          retention-days: 7
       - name: Upload passive capability evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()

@@ -24,7 +24,52 @@ final class QuartzReplayProbeTests: XCTestCase {
         XCTAssertEqual(probe.report.invalidatedTaps, 6)
         XCTAssertEqual(probe.report.transportEnvelopes.count, 2)
         XCTAssertEqual(probe.report.transportEnvelopes.map(\.tapGeneration), [1, 2])
+        XCTAssertEqual(probe.report.disabledNotifications.count, 1)
+        let notification = try XCTUnwrap(probe.report.disabledNotifications.first)
+        XCTAssertTrue(notification.expected)
+        XCTAssertEqual(notification.callbackType, CGEventType.tapDisabledByUserInput.rawValue)
+        XCTAssertEqual(notification.phase, .awaitingDisabledNotification)
+        XCTAssertEqual(notification.stage, .admission)
+        XCTAssertEqual(notification.isEnabled, false)
+        XCTAssertEqual(notification.generation, 1)
+        XCTAssertLessThanOrEqual(try XCTUnwrap(notification.requestedUptime), notification.uptime)
+        let reenabling = try XCTUnwrap(probe.report.lifecycleTransitions.first { $0.phase == .reenabling })
+        XCTAssertEqual(reenabling.tapID, notification.tapID)
+        XCTAssertEqual(reenabling.generation, notification.generation)
+        XCTAssertLessThanOrEqual(notification.uptime, reenabling.uptime)
         print("PASS: live public Quartz fixture routing, exact source tags, admission, forwarding, consumption and teardown; NOT physical/native gesture suppression")
+    }
+
+    func testPlannedDisableNotificationRequiresExactTapGenerationStateAndType() {
+        // Bind numeric evidence from CI to the actual SDK definitions, rather
+        // than treating both special notifications as a timeout.
+        XCTAssertEqual(CGEventType.tapDisabledByUserInput.rawValue, UInt32.max)
+        XCTAssertEqual(CGEventType.tapDisabledByTimeout.rawValue, UInt32.max - 1)
+        let request = QuartzReplayProbe.DisableRequest(tapID: "active-1", generation: 1,
+                                                       requestedUptime: 10, deadlineUptime: 12)
+        func accepts(type: CGEventType = .tapDisabledByUserInput, stage: QuartzReplayProbe.Stage = .admission,
+                     id: String = "active-1", generation: Int = 1,
+                     phase: QuartzReplayProbe.LifecyclePhase = .awaitingDisabledNotification,
+                     enabled: Bool? = false, uptime: Double = 11) -> Bool {
+            request.accepts(type: type, stage: stage, tapID: id, generation: generation,
+                            phase: phase, isEnabled: enabled, uptime: uptime)
+        }
+        XCTAssertTrue(accepts())
+        XCTAssertFalse(accepts(type: .tapDisabledByTimeout), "timeouts must never authorize re-enable")
+        XCTAssertFalse(accepts(type: .scrollWheel))
+        XCTAssertFalse(accepts(stage: .head))
+        XCTAssertFalse(accepts(stage: .tail))
+        XCTAssertFalse(accepts(id: "retired-tap"))
+        XCTAssertFalse(accepts(generation: 2))
+        XCTAssertFalse(accepts(enabled: true))
+        XCTAssertFalse(accepts(enabled: nil))
+        XCTAssertFalse(accepts(uptime: 9.99))
+        XCTAssertFalse(accepts(uptime: 12.01))
+        XCTAssertFalse(accepts(uptime: .nan))
+        let otherPhases: [QuartzReplayProbe.LifecyclePhase] = [.running, .disabledConfirmed, .reenabling, .teardown, .failed]
+        for phase in otherPhases {
+            XCTAssertFalse(accepts(phase: phase), "duplicate, unsolicited and late notifications must fail")
+        }
     }
 
     func testFixtureGateRejectsMotionModifiersPhasesAndCallbackMismatch() throws {
