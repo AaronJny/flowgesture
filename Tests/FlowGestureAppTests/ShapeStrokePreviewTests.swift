@@ -7,6 +7,21 @@ import XCTest
 final class ShapeStrokePreviewTests: XCTestCase {
     private let points = [GesturePoint(x: 18, y: 15), GesturePoint(x: 18, y: 55), GesturePoint(x: 65, y: 55)]
 
+    @MainActor func testBitmapSamplingUsesDrawingCoordinatesRatherThanScanlineOrder() async throws {
+        // Calibrate the helper independently of StrokeView and its gesture-Y
+        // conversion. These rectangles are asymmetric in both axes.
+        let image = try renderBitmap(width: 32, height: 24) { context in
+            context.setFillColor(CGColor(red: 1, green: 0, blue: 0, alpha: 1))
+            context.fill(CGRect(x: 3, y: 4, width: 5, height: 7))
+            context.setFillColor(CGColor(red: 0, green: 0, blue: 1, alpha: 1))
+            context.fill(CGRect(x: 21, y: 16, width: 4, height: 3))
+        }
+        try assertColor(image, x: 5, y: 6, equals: .red)
+        try assertColor(image, x: 23, y: 17, equals: .blue)
+        XCTAssertEqual(image.alpha(x: 5, y: 17), 0)
+        XCTAssertEqual(image.alpha(x: 23, y: 6), 0)
+    }
+
     @MainActor func testEmptyPreviewLeavesBackgroundTransparent() async throws {
         let view = makeView()
         view.update(points: [], isRecording: false)
@@ -50,13 +65,13 @@ final class ShapeStrokePreviewTests: XCTestCase {
         let view = makeView()
         view.update(points: points, isRecording: true)
         _ = try render(view)
-        view.needsDisplay = false
+        view.resetDisplayRequests()
         view.update(points: points, isRecording: false)
-        XCTAssertTrue(view.needsDisplay)
+        XCTAssertGreaterThan(view.displayRequests, 0, "Cancel must request repaint even before the view has a window")
         try assertColor(render(view), x: 40, y: 25, equals: NSColor(Color.accentColor))
-        view.needsDisplay = false
+        view.resetDisplayRequests()
         view.update(points: [], isRecording: false)
-        XCTAssertTrue(view.needsDisplay)
+        XCTAssertGreaterThan(view.displayRequests, 0, "Clear must request repaint")
         XCTAssertTrue(try render(view).bytes.allSatisfy { $0 == 0 })
     }
 
@@ -81,19 +96,38 @@ final class ShapeStrokePreviewTests: XCTestCase {
 
     @MainActor func testAppearanceChangesInvalidateDynamicColors() async {
         let view = makeView()
-        view.needsDisplay = false
+        view.resetDisplayRequests()
         view.viewDidChangeEffectiveAppearance()
-        XCTAssertTrue(view.needsDisplay)
+        XCTAssertGreaterThan(view.displayRequests, 0, "An appearance change must request repaint")
     }
 
-    @MainActor private func makeView() -> ShapeStrokePreview.StrokeView {
-        ShapeStrokePreview.StrokeView(frame: NSRect(x: 0, y: 0, width: 80, height: 80))
+    @MainActor private func makeView() -> RedrawTrackingView {
+        RedrawTrackingView(frame: NSRect(x: 0, y: 0, width: 80, height: 80))
+    }
+
+    /// AppKit need not retain dirty regions for an unattached view. Observe the
+    /// production invalidation request rather than assuming its getter is true.
+    private final class RedrawTrackingView: ShapeStrokePreview.StrokeView {
+        private(set) var displayRequests = 0
+        override var needsDisplay: Bool {
+            get { super.needsDisplay }
+            set {
+                if newValue { displayRequests += 1 }
+                super.needsDisplay = newValue
+            }
+        }
+        func resetDisplayRequests() { displayRequests = 0 }
     }
 
     /// Exercise the actual NSView draw implementation in a CPU bitmap. No
     /// window, Metal device, input permission, or synthetic mouse event is used.
     @MainActor private func render(_ view: ShapeStrokePreview.StrokeView) throws -> Bitmap {
-        let width = Int(view.bounds.width), height = Int(view.bounds.height)
+        try renderBitmap(width: Int(view.bounds.width), height: Int(view.bounds.height)) { _ in
+            view.effectiveAppearance.performAsCurrentDrawingAppearance { view.draw(view.bounds) }
+        }
+    }
+
+    @MainActor private func renderBitmap(width: Int, height: Int, draw: (CGContext) -> Void) throws -> Bitmap {
         let colorSpace = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
         let context = try XCTUnwrap(CGContext(data: nil, width: width, height: height,
                                              bitsPerComponent: 8, bytesPerRow: width * 4, space: colorSpace,
@@ -101,19 +135,24 @@ final class ShapeStrokePreviewTests: XCTestCase {
         context.clear(CGRect(x: 0, y: 0, width: width, height: height))
         NSGraphicsContext.saveGraphicsState()
         defer { NSGraphicsContext.restoreGraphicsState() }
-        // Mark the view's top-left coordinate convention without transforming
-        // the bitmap. Tests sample CGContext device coordinates directly.
+        // The flipped flag describes the view; it does not install AppKit's
+        // usual view-to-device transform in this standalone CGContext. Keep its
+        // default Y-up coordinates and map bitmap scanlines in Bitmap.components.
         NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
-        view.effectiveAppearance.performAsCurrentDrawingAppearance { view.draw(view.bounds) }
+        draw(context)
         let data = try XCTUnwrap(context.data).assumingMemoryBound(to: UInt8.self)
-        return Bitmap(width: width, bytes: Array(UnsafeBufferPointer(start: data, count: width * height * 4)))
+        return Bitmap(width: width, height: height, bytes: Array(UnsafeBufferPointer(start: data, count: width * height * 4)))
     }
 
     private struct Bitmap {
         let width: Int
+        let height: Int
         let bytes: [UInt8]
         func components(x: Int, y: Int) -> [CGFloat] {
-            let offset = (y * width + x) * 4
+            // CGContext Y starts at the bottom, but bitmap rows start at the
+            // top. Sample the pixel square [y, y + 1), not the mirrored row.
+            let row = height - 1 - y
+            let offset = (row * width + x) * 4
             return (0..<4).map { CGFloat(bytes[offset + $0]) / 255 }
         }
         func alpha(x: Int, y: Int) -> CGFloat { components(x: x, y: y)[3] }

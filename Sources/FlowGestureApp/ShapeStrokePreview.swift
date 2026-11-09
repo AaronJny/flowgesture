@@ -15,7 +15,7 @@ struct ShapeStrokePreview: NSViewRepresentable {
         view.update(points: points, isRecording: isRecording)
     }
 
-    final class StrokeView: NSView {
+    class StrokeView: NSView {
         private var points: [GesturePoint] = []
         private var isRecording = false
 
