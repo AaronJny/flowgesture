@@ -1,6 +1,6 @@
 # Verification without connecting a personal Mac
 
-Research: 2026-11-09. This workflow does not require connecting a personal computer. Cloud work can continue independently; the optional local check below is not a prerequisite. No third-party program was installed or run, and no system preferences or security settings were changed for this research.
+Research and validation: 2026-11-09. This workflow uses isolated cloud runners and does not require connecting a personal computer. The optional local check below is not a prerequisite. System gesture assignments and security settings are unchanged.
 
 ## What public evidence actually supplies
 
@@ -97,6 +97,71 @@ collector remains experimental and does not relax that gate.
 This validates real public-event transport, consumption, one-use admission and
 tap lifecycle under synthetic inputs. It still does not validate physical
 trackpad recognition, a private Dock stream or native gesture suppression.
+
+## Synthetic Dock consumer result, 2026-11-09
+
+[Run 42620268652](https://github.com/AaronJny/flowgesture/actions/runs/42620268652)
+at code revision `411673270be2bc4080431a6e49b3fb658b7d226f` passed all nine jobs.
+The three platforms were macOS 15.8.2 / 24H232 ARM64, 15.7.9 / 24G830 Intel,
+and 26.7.2 / 25G332 ARM64. Each ordinary build passed 305 of 306 Swift tests
+(the opt-in public Quartz test was skipped there), the focused collector checks,
+every app/UI smoke, and original/uploaded/downloaded DMG verification. Separate
+public Quartz jobs passed on each platform as well.
+
+The independent `FlowGestureDockSmokeHarness` executable runs a real AppKit loop
+on dedicated disposable hosted runners. It creates only its own desktop anchor
+and fullscreen window. A pinned, MIT-licensed InstantSpaceSwitcher legacy recipe
+constructs class 30 / HID 23 phases 1, 2 and 4. No raw touch input is generated.
+The test is explicitly opt-in, excludes self-hosted sessions and macOS 27+, and
+does not form part of the application or DMG.
+
+Each platform's schema-4 report verified five complete rounds: forward left,
+forward right to restore, consume left without moving, forward left again, and
+a planned forward right return before cleanup. The return is permitted only
+after four fully successful rounds; failures never trigger repair gestures.
+All 15 packets were posted, 42 matching tap receipts were recorded, three packets
+were consumed, three taps were invalidated, and both owned windows closed after
+a normal fullscreen exit with no recorded failure or deferred cleanup. Space
+notifications and both windows' `isOnActiveSpace` states jointly checked actual
+transitions. Packet type, PID, tag and known payload fields matched exactly.
+Ordering is checked **within each tap**, not inferred from cross-Mach-port
+callback scheduling. The first complete forward control freezes the observed
+flags value; no flag establishes physical origin.
+
+Field 124's observed API readback on these builds is exactly
+`Double(Float(requestedProgress))`. The setter still receives the original
+recipe value. Reports preserve requested and observed values separately; neither
+construction nor reception uses a floating-point tolerance. Negative matcher
+tests use explicit synthetic snapshots, rather than assuming every Quartz field
+can be modified on a copied event.
+
+This is evidence that the specified synthetic legacy stream can cause real Space
+changes, be consumed at the session tap, and be followed by successful controls
+on these runners. It is **not** evidence of physical three/four-finger suppression,
+raw/native device correlation, visibility of every hardware companion packet, or
+safe physical terminal behavior. Physical input may affect upstream state before
+the observed tap. Production still creates no active native suppression profile.
+
+One preceding run,
+[42616627310](https://github.com/AaronJny/flowgesture/actions/runs/42616627310),
+passed all three Dock jobs but failed the Intel foreground side-button deadline:
+the complete action pair arrived at +3.682 seconds after the +2.285 deadline.
+That failure is retained, not called a pass or attributed to an unproved cause.
+The final revision adds bounded, fixture-only timing diagnostics without changing
+the two-second stage budget, 250 ms settling requirement, or 15-second watchdog.
+Its successful rerun does not establish a repair of that earlier latency cause.
+Normal app launches leave this tracing disabled.
+
+The remaining native-interception gate needs real trackpad input and independent
+raw/native identity and terminal-state observations. Official virtual-HID APIs
+are not an unrestricted substitute: Apple's
+[HIDUserDevice header](https://github.com/apple-oss-distributions/IOHIDFamily/blob/777ccd9698845aadf711e32d843c8c9b777431d9/HID/Headers/HIDUserDevice.h#L49-L55)
+requires the virtual-device entitlement, and
+[hidapi's hosted macOS CI](https://github.com/libusb/hidapi/blob/16a3ce903683efa27e25c1820e37159d120f7563/.github/workflows/builds.yml#L59-L67)
+documents skipping that test without the entitlement and interactive grant.
+These are the constraints of the inspected routes, not a universal assertion
+that physical remote testing is impossible. The experimental passive collector's
+unknown-lock-state refusal described above remains unresolved.
 
 ## Optional self-run baseline, no remote access or source build
 
