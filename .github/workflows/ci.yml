@@ -3,6 +3,12 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      quartz_replay:
+        description: Run the opt-in public Quartz transport probe (not physical gesture validation)
+        type: boolean
+        required: false
+        default: false
 concurrency:
   group: flowgesture-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -79,3 +85,29 @@ jobs:
           path: build/ui-review/*.png
           if-no-files-found: ignore
           retention-days: 3
+
+  quartz-replay:
+    # Explicit isolated-branch opt-in. Ordinary branches/main never post fixtures.
+    if: (github.event_name == 'workflow_dispatch' && inputs.quartz_replay) || (github.event_name == 'push' && github.ref == 'refs/heads/dot/touch-compatibility-20261108')
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-15-intel, macos-26]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Live public Quartz transport and admission probe
+        env:
+          FLOWGESTURE_RUN_QUARTZ_REPLAY: '1'
+        run: bash scripts/test-quartz-replay.sh
+      - name: Upload bounded synthetic replay evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: FlowGesture-quartz-replay-${{ matrix.os }}
+          path: build/quartz-replay/report.json
+          if-no-files-found: warn
+          retention-days: 7
