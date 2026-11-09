@@ -6,19 +6,42 @@ import Darwin
 /// Opt-in CI probe: exercises actual foreground rules through the event tap and
 /// checks generated action events, text editing, and the usable pause control.
 final class ForegroundRuleSmoke {
+    private struct ActionEvent: Equatable, CustomStringConvertible {
+        let type: CGEventType
+        let keyCode: Int64
+        var description: String { "\(type == .keyDown ? "keyDown" : "keyUp")(\(keyCode))" }
+    }
+
+    private static let sideOutputKey: CGKeyCode = 38
+    private static let keyboardOutputKey: CGKeyCode = 37
+    private static let stageTimeout: TimeInterval = 2
+    private static let settleInterval: TimeInterval = 0.25
+    private static let totalTimeout: TimeInterval = 15
     private let model: AppModel
     private var audit: CFMachPort?
     private var source: CFRunLoopSource?
-    private var actionEvents = 0
+    private var observedActions: [ActionEvent] = []
+    private var actionEvents: Int { observedActions.count }
+    private var auditDisabledReason: String?
+    private var startedAt: TimeInterval = 0
+    private var overallDeadline: TimeInterval = 0
+    private var stage = "setup"
+    private var stageStartedAt: TimeInterval = 0
     private var finished = false
     private var pointerDiagnostics = "no mouse event posted"
     init(model: AppModel) { self.model = model }
 
     @MainActor func start() {
-        let output = Action.shortcut(KeyboardShortcut(keyCode: 38, modifiers: [.command, .option]))
+        startedAt = ProcessInfo.processInfo.systemUptime
+        stageStartedAt = startedAt
+        overallDeadline = startedAt + Self.totalTimeout
+        let output = Action.shortcut(KeyboardShortcut(keyCode: Self.sideOutputKey, modifiers: [.command, .option]))
+        // Distinct fixture outputs prevent a late duplicate from the side-button
+        // rule being mistaken for the keyboard rule's expected down/up pair.
+        let keyboardOutput = Action.shortcut(KeyboardShortcut(keyCode: Self.keyboardOutputKey, modifiers: [.command, .option]))
         var book = RuleBook(rules: [
             Rule(name: "foreground-side", trigger: .mouseButton(MouseButtonTrigger(button: .forward)), actions: [output]),
-            Rule(name: "foreground-key", trigger: .keyboard(KeyboardShortcut(keyCode: 40, modifiers: [.command, .option])), actions: [output]),
+            Rule(name: "foreground-key", trigger: .keyboard(KeyboardShortcut(keyCode: 40, modifiers: [.command, .option])), actions: [keyboardOutput]),
             Rule(name: "foreground-left", trigger: .mouseButton(MouseButtonTrigger(button: .left)), actions: [output]),
             Rule(name: "foreground-text", trigger: .keyboard(KeyboardShortcut(keyCode: 0)), actions: [output])
         ])
@@ -28,10 +51,18 @@ final class ForegroundRuleSmoke {
         model.publishConfiguration()
         NSApp.activate(ignoringOtherApps: true)
         let callback: CGEventTapCallBack = { _, type, event, context in
-            if let context, (type == .keyDown || type == .keyUp),
-               event.getIntegerValueField(.eventSourceUserData) == EventEngine.syntheticTag,
-               event.getIntegerValueField(.keyboardEventKeycode) == 38 {
-                Unmanaged<ForegroundRuleSmoke>.fromOpaque(context).takeUnretainedValue().actionEvents += 1
+            if let context {
+                let smoke = Unmanaged<ForegroundRuleSmoke>.fromOpaque(context).takeUnretainedValue()
+                if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+                    let reason = type == .tapDisabledByTimeout ? "timeout" : "user input"
+                    smoke.auditDisabledReason = reason
+                    print("INFO: foreground audit tap disabled: \(reason)")
+                } else if (type == .keyDown || type == .keyUp),
+                          event.getIntegerValueField(.eventSourceUserData) == EventEngine.syntheticTag {
+                    let observed = ActionEvent(type: type, keyCode: event.getIntegerValueField(.keyboardEventKeycode))
+                    smoke.observedActions.append(observed)
+                    print("INFO: foreground audit +\(ForegroundRuleSmoke.seconds(ProcessInfo.processInfo.systemUptime - smoke.startedAt))s: \(observed); actionEvents=\(smoke.actionEvents), stage=\(smoke.stage)")
+                }
             }
             return Unmanaged.passUnretained(event)
         }
@@ -41,21 +72,28 @@ final class ForegroundRuleSmoke {
         audit = tap; self.source = source
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { if !self.finished { self.fail("foreground rule test timeout") } }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            guard self.model.engineRunning, NSApp.isActive,
-                  NSWorkspace.shared.frontmostApplication?.processIdentifier == getpid() else { self.fail("FlowGesture is not the actual active foreground app"); return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, overallDeadline - ProcessInfo.processInfo.systemUptime)) {
+            if !self.finished { self.fail("foreground rule test global deadline exceeded (\(Self.totalTimeout)s)") }
+        }
+        waitForStage("foreground readiness", expected: [], failure: "FlowGesture is not the actual active foreground app with a key settings window", condition: {
+            self.model.engineRunning && NSApp.isActive && self.settingsWindow?.isKeyWindow == true &&
+                NSWorkspace.shared.frontmostApplication?.processIdentifier == getpid()
+        }) {
             self.mouse(button: 4, x: 100, y: 100)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { self.checkSideAndKeyboard() }
+            self.checkSideAndKeyboard()
         }
     }
     @MainActor private func checkSideAndKeyboard() {
-        guard actionEvents == 2, model.lastEvent == "foreground-side" else { fail("side-button rule did not execute while FlowGesture was foreground"); return }
-        if let window = NSApp.keyWindow { window.makeFirstResponder(window.contentView) }
-        key(code: 40, flags: [.maskCommand, .maskAlternate])
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-            guard self.actionEvents == 4, self.model.lastEvent == "foreground-key" else { self.fail("keyboard rule did not execute while FlowGesture was foreground"); return }
-            self.checkEditing()
+        waitForStage("side-button action", expected: Self.sideEvents, failure: "side-button rule did not execute while FlowGesture was foreground", condition: {
+            self.actionEvents == 2 && self.model.lastEvent == "foreground-side"
+        }) {
+            if let window = NSApp.keyWindow { window.makeFirstResponder(window.contentView) }
+            self.key(code: 40, flags: [.maskCommand, .maskAlternate])
+            self.waitForStage("keyboard action", expected: Self.allEvents, failure: "keyboard rule did not execute while FlowGesture was foreground", condition: {
+                self.actionEvents == 4 && self.model.lastEvent == "foreground-key"
+            }) {
+                self.checkEditing()
+            }
         }
     }
     @MainActor private func checkEditing() {
@@ -64,8 +102,9 @@ final class ForegroundRuleSmoke {
         content.addSubview(field)
         window.makeFirstResponder(field)
         key(code: 0, flags: [])
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            guard field.stringValue == "a", self.actionEvents == 4 else { self.fail("text input was stolen by a keyboard rule"); return }
+        waitForStage("text editing", expected: Self.allEvents, failure: "text input was stolen by a keyboard rule", condition: {
+            field.stringValue == "a" && self.actionEvents == 4 && self.model.lastEvent == "foreground-key"
+        }) {
             window.makeFirstResponder(content)
             field.removeFromSuperview()
             self.checkPauseControl()
@@ -105,14 +144,63 @@ final class ForegroundRuleSmoke {
         // Give AppKit a distinct down/up pair rather than two same-turn posts.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) {
             guard self.postMouse(type: .leftMouseUp, point: point, button: 0) else { return }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                guard !self.model.isEnabled, self.actionEvents == 4 else {
-                    self.fail("left-button rule blocked the settings pause control or the control did not receive the click"); return
-                }
+            self.waitForStage("pause control", expected: Self.allEvents, failure: "left-button rule blocked the settings pause control or the control did not receive the click", condition: {
+                !self.model.isEnabled && self.actionEvents == 4 && self.model.lastEvent == "foreground-key"
+            }) {
                 self.finished = true
                 print("PASS: foreground side-button and keyboard mappings executed; text editing and pause-control clicks remained usable")
                 exit(0)
             }
+        }
+    }
+
+    private static var sideEvents: [ActionEvent] {
+        [ActionEvent(type: .keyDown, keyCode: Int64(sideOutputKey)), ActionEvent(type: .keyUp, keyCode: Int64(sideOutputKey))]
+    }
+
+    private static var allEvents: [ActionEvent] {
+        sideEvents + [ActionEvent(type: .keyDown, keyCode: Int64(keyboardOutputKey)), ActionEvent(type: .keyUp, keyCode: Int64(keyboardOutputKey))]
+    }
+
+    private static func seconds(_ interval: TimeInterval) -> String { String(format: "%.3f", interval) }
+
+    @MainActor private var auditIsEnabled: Bool {
+        guard let audit else { return false }
+        return CGEvent.tapIsEnabled(tap: audit)
+    }
+
+    @MainActor private func waitForStage(_ name: String, expected: [ActionEvent], failure: String,
+                                        condition: @escaping () -> Bool, completion: @escaping () -> Void) {
+        guard !finished else { return }
+        stage = name
+        stageStartedAt = ProcessInfo.processInfo.systemUptime
+        let deadline = min(stageStartedAt + Self.stageTimeout, overallDeadline)
+        print("INFO: foreground stage=\(name), deadline=+\(Self.seconds(deadline - startedAt))s, budget=\(Self.seconds(deadline - stageStartedAt))s, settle=\(Self.seconds(Self.settleInterval))s, expected=\(expected)")
+        pollStage(expected: expected, deadline: deadline, matchingSince: nil, failure: failure, condition: condition, completion: completion)
+    }
+
+    @MainActor private func pollStage(expected: [ActionEvent], deadline: TimeInterval, matchingSince: TimeInterval?,
+                                     failure: String, condition: @escaping () -> Bool, completion: @escaping () -> Void) {
+        guard !finished else { return }
+        guard auditDisabledReason == nil, auditIsEnabled else { fail("action audit tap disabled during \(stage)"); return }
+        let now = ProcessInfo.processInfo.systemUptime
+        // Incomplete pairs may arrive over several run-loop turns. Extra events,
+        // wrong keys and out-of-order down/up events are failures, never progress.
+        guard observedActions.count <= expected.count, Array(expected.prefix(observedActions.count)) == observedActions else {
+            fail("\(failure) (unexpected synthetic key sequence; expected \(expected))"); return
+        }
+        guard now < deadline else { fail("\(failure) (stage deadline exceeded)"); return }
+        let isMatching = observedActions == expected && condition()
+        let stableSince = isMatching ? (matchingSince ?? now) : nil
+        // Keep the exact assertion true across a quiet interval before starting
+        // the next input. The run loop remains free to deliver late duplicates.
+        if let stableSince, now - stableSince >= Self.settleInterval {
+            print("INFO: foreground stage=\(stage) passed after \(Self.seconds(now - stageStartedAt))s; actionEvents=\(actionEvents), sequence=\(observedActions)")
+            completion()
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
+            self.pollStage(expected: expected, deadline: deadline, matchingSince: stableSince, failure: failure, condition: condition, completion: completion)
         }
     }
 
@@ -154,7 +242,8 @@ final class ForegroundRuleSmoke {
     @MainActor private func fail(_ reason: String) {
         guard !finished else { return }
         finished = true
-        fputs("FAIL: \(reason); enabled=\(model.isEnabled), engineRunning=\(model.engineRunning), actionEvents=\(actionEvents), lastEvent=\(model.lastEvent), active=\(NSApp.isActive), keySettings=\(settingsWindow?.isKeyWindow == true); \(pointerDiagnostics)\n", stderr)
+        let now = ProcessInfo.processInfo.systemUptime
+        fputs("FAIL: \(reason); stage=\(stage), stageElapsed=\(Self.seconds(now - stageStartedAt))s, totalElapsed=\(Self.seconds(now - startedAt))s, enabled=\(model.isEnabled), engineRunning=\(model.engineRunning), actionEvents=\(actionEvents), sequence=\(observedActions), auditEnabled=\(auditIsEnabled), auditDisabledReason=\(auditDisabledReason ?? "none"), lastEvent=\(model.lastEvent), active=\(NSApp.isActive), keySettings=\(settingsWindow?.isKeyWindow == true); \(pointerDiagnostics)\n", stderr)
         captureFailureWindow()
         exit(1)
     }
