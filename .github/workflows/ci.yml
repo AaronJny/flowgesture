@@ -9,6 +9,11 @@ on:
         type: boolean
         required: false
         default: false
+      dock_smoke:
+        description: Run synthetic Spaces/Dock smoke on disposable hosted desktops (not physical gesture validation)
+        type: boolean
+        required: false
+        default: false
 concurrency:
   group: flowgesture-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -139,6 +144,7 @@ jobs:
           path: build/console-session-probe/report.json
           if-no-files-found: warn
           retention-days: 7
+
       - name: Upload passive capability evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
@@ -153,5 +159,49 @@ jobs:
         with:
           name: FlowGesture-quartz-replay-${{ matrix.os }}
           path: build/quartz-replay/report.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  dock-smoke:
+    # A dedicated disposable desktop: never share a runner with app/Quartz jobs.
+    # Failure may leave a private Dock animation incomplete; end the job rather
+    # than repairing/reusing that session. No self-hosted runners are allowed.
+    if: (github.event_name == 'workflow_dispatch' && inputs.dock_smoke) || (github.event_name == 'push' && github.ref == 'refs/heads/dot/touch-compatibility-20261108')
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-15-intel, macos-26]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Test synthetic Dock consumer on disposable hosted desktop
+        env:
+          FLOWGESTURE_RUN_DOCK_SMOKE: '1'
+          FLOWGESTURE_DOCK_SMOKE_REVISION: ${{ github.sha }}
+        run: |
+          mkdir -p build/dock-smoke
+          export FLOWGESTURE_DOCK_SMOKE_REPORT="$PWD/build/dock-smoke/report.json"
+          swift build --build-tests
+          python3 - <<'PY'
+          import os, signal, subprocess, sys
+          command = ['swift', 'test', '--skip-build', '--filter', 'SyntheticDockConsumerSmokeTests/testOptInHostedDockConsumerSmoke']
+          child = subprocess.Popen(command, start_new_session=True)
+          try:
+              sys.exit(child.wait(timeout=90))
+          except subprocess.TimeoutExpired:
+              print('FAIL: isolated synthetic Dock test exceeded 90 seconds; discard this runner session.', flush=True)
+              os.killpg(child.pid, signal.SIGKILL)
+              child.wait()
+              sys.exit(124)
+          PY
+      - name: Upload bounded synthetic Dock evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: FlowGesture-dock-smoke-${{ matrix.os }}
+          path: build/dock-smoke/report.json
           if-no-files-found: warn
           retention-days: 7

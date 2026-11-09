@@ -26,6 +26,13 @@ contact coordinates and narrowly scoped event metadata can be present.
 USAGE.txt describes explicit --capture and hardware-free --self-test modes.
 A successful self-test or CI run does not validate physical provenance, complete
 stream visibility, raw/native correlation, or macOS gesture suppression.
+
+Known live-capture limitation (verified 2026-11-09): macOS 15 ARM/Intel and 26 ARM
+hosted sessions omit the explicit screen-lock Boolean even in an active console
+session. This collector rejects that unknown state before device enumeration or
+capture. Its tests and refusal path pass, but physical live capture has not been
+demonstrated. A normal unlocked machine may therefore also be refused. Do not
+treat missing lock state as false or weaken the gate merely to obtain a trace.
 TEXT
 TMP="$(mktemp -d -t flowgesture-capture-release-check)"
 trap 'rm -rf "$TMP"' EXIT

@@ -57,12 +57,46 @@ original and downloaded DMG install/launch verification. A separate test-only
 polling deadline defect discovered on Intel was repaired without dropping any
 assertion; 12 timing/sequence regressions and the complete foreground smoke passed.
 See [the compatibility review](compatibility-review-2026-11-08.md#final-cloud-verification)
-for the precise checks and timing evidence. Later changes are documentation only.
+for the precise checks and timing evidence. The production app sources remain
+unchanged through `29d816de48c5830326b18a6fcb54f154cb7f4dbf`; later changes add
+isolated tests and an experimental passive collector, not native interception.
 
 These results do not provide a physical event stream, prove native suppression,
 or authorize activation. Production still constructs no coordinator and enables
 no native interception profile. The optional baseline below is not needed to
 reproduce these cloud results and is not a request to connect the user's Mac.
+
+## Actual Quartz transport result, 2026-11-09
+
+[Run 42608176992](https://github.com/AaronJny/flowgesture/actions/runs/42608176992)
+at `29d816de48c5830326b18a6fcb54f154cb7f4dbf` passed all six jobs on the three
+OS/build/architecture combinations above. Each ordinary build ran 285 Swift tests
+(284 passed, one opt-in live test skipped, no failures), plus 29 focused collector
+tests and the complete existing app/UI/package checks. Each separate opt-in job
+then passed the live public Quartz test on an actual macOS event-tap chain.
+
+All three schema-4 JSON reports contain 11 zero-motion public-scroll deliveries,
+29 ordered callbacks, three harmless one-use admissions, two tap generations,
+six invalidated taps and two exact transport envelopes. The OS added flags bit 29
+(`0x20000000`); this was accepted only after a full pass-through calibration and
+remained exact across the three taps. It is not a physical-source marker. One
+deliberately requested disable produced `tapDisabledByUserInput`, matched to the
+exact tap/generation/state/time window; re-enable occurred only after that
+notification and the disabled forwarding control. Unexpected notifications and
+timeouts still fail. No private gesture packet was posted in these tests.
+
+The independent read-only console diagnostic succeeded on all three systems and
+uniquely matched the current UID/audit session without exporting either ID. Each
+record had explicit true login-done/on-console Booleans but no screen-lock key.
+Consequently the collector safely refused with `console_session_state_unknown`
+before device enumeration. This does **not** show that those runners lack touch
+devices and does **not** demonstrate usable live capture. Apple consumer code's
+default-false behavior is not a producer guarantee about a missing field. The
+collector remains experimental and does not relax that gate.
+
+This validates real public-event transport, consumption, one-use admission and
+tap lifecycle under synthetic inputs. It still does not validate physical
+trackpad recognition, a private Dock stream or native gesture suppression.
 
 ## Optional self-run baseline, no remote access or source build
 
