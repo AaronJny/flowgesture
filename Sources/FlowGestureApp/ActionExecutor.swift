@@ -12,11 +12,13 @@ final class ActionExecutor {
     }
     /// An explicitly captured nil stays nil; never retarget a queued window/menu
     /// action to whichever app happens to become foreground a moment later.
-    func execute(_ actions: [Action], targetApplication: NSRunningApplication?) {
+    func execute(_ actions: [Action], targetApplication: NSRunningApplication?, smokeTrace: ForegroundSmokeTrace? = nil) {
         let token = gate.snapshot()
         let app = targetApplication
         // Ordered serial execution preserves action-list semantics, including scripts.
+        smokeTrace?.record("action.worker.enqueue")
         scriptQueue.async { [weak self] in
+            smokeTrace?.record("action.worker.begin")
             guard let self else { return }
             var targetApp = app
             for action in actions {
@@ -38,14 +40,20 @@ final class ActionExecutor {
                     guard self.gate.isCurrent(token), let launched = result.read() else { return }
                     targetApp = launched
                     DispatchQueue.main.sync { if self.gate.isCurrent(token) { _ = launched.activate(options: .activateIgnoringOtherApps) } }
-                default: DispatchQueue.main.sync { if self.gate.isCurrent(token) { self.perform(action, app: targetApp) } }
+                default:
+                    smokeTrace?.record("action.main.enqueue")
+                    DispatchQueue.main.sync {
+                        smokeTrace?.record("action.main.begin")
+                        defer { smokeTrace?.record("action.main.end") }
+                        if self.gate.isCurrent(token) { self.perform(action, app: targetApp, smokeTrace: smokeTrace) }
+                    }
                 }
             }
         }
     }
-    private func perform(_ action: Action, app: NSRunningApplication?) {
+    private func perform(_ action: Action, app: NSRunningApplication?, smokeTrace: ForegroundSmokeTrace? = nil) {
         switch action {
-        case .shortcut(let shortcut): shortcutEvent(shortcut)
+        case .shortcut(let shortcut): shortcutEvent(shortcut, smokeTrace: smokeTrace)
         case .openURL(let value):
             guard let url = URL(string: value), let scheme = url.scheme, !scheme.isEmpty else { fail("Invalid URL / 无效网址"); return }
             if !NSWorkspace.shared.open(url) { fail("Could not open URL / 无法打开网址") }
@@ -74,14 +82,17 @@ final class ActionExecutor {
         script.executeAndReturnError(&error)
         if let error { fail(error.description) }
     }
-    private func shortcutEvent(_ shortcut: KeyboardShortcut) {
+    private func shortcutEvent(_ shortcut: KeyboardShortcut, smokeTrace: ForegroundSmokeTrace? = nil) {
         var flags: CGEventFlags = []
         if shortcut.modifiers.contains(.command) { flags.insert(.maskCommand) }; if shortcut.modifiers.contains(.option) { flags.insert(.maskAlternate) }
         if shortcut.modifiers.contains(.control) { flags.insert(.maskControl) }; if shortcut.modifiers.contains(.shift) { flags.insert(.maskShift) }
         if shortcut.modifiers.contains(.function) { flags.insert(.maskSecondaryFn) }
         for down in [true,false] {
             let event = CGEvent(keyboardEventSource: nil, virtualKey: shortcut.keyCode, keyDown: down)
-            event?.flags = flags; event?.setIntegerValueField(.eventSourceUserData, value: EventEngine.syntheticTag); event?.post(tap: .cghidEventTap)
+            event?.flags = flags; event?.setIntegerValueField(.eventSourceUserData, value: EventEngine.syntheticTag)
+            smokeTrace?.record("action.post.begin \(event.map { ForegroundSmokeTrace.describe($0) } ?? "event-unavailable")")
+            event?.post(tap: .cghidEventTap)
+            smokeTrace?.record("action.post.end \(event.map { ForegroundSmokeTrace.describe($0) } ?? "event-unavailable")")
         }
     }
     private func attribute(_ element: AXUIElement, _ key: CFString) -> CFTypeRef? {

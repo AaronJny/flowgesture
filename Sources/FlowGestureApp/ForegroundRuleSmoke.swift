@@ -12,8 +12,8 @@ final class ForegroundRuleSmoke {
         var description: String { "\(type == .keyDown ? "keyDown" : "keyUp")(\(keyCode))" }
     }
 
-    private static let sideOutputKey: CGKeyCode = 38
-    private static let keyboardOutputKey: CGKeyCode = 37
+    static let sideOutputKey: CGKeyCode = 38
+    static let keyboardOutputKey: CGKeyCode = 37
     private static let stageTimeout: TimeInterval = 2
     private static let settleInterval: TimeInterval = 0.25
     private static let totalTimeout: TimeInterval = 15
@@ -29,6 +29,7 @@ final class ForegroundRuleSmoke {
     private var stageStartedAt: TimeInterval = 0
     private var stageWait: ForegroundSmokeStageWait<ActionEvent>?
     private var stageTimer: Timer?
+    private var runLoopObserver: CFRunLoopObserver?
     // Both callers run on the main CFRunLoop, including inside event tracking.
     // Sample in place: dispatching this evidence would timestamp queue latency.
     private var observeStage: ((String) -> Void)?
@@ -38,12 +39,25 @@ final class ForegroundRuleSmoke {
 
     @MainActor func start() {
         startedAt = ProcessInfo.processInfo.systemUptime
+        ForegroundSmokeTrace.shared?.start(at: startedAt)
+        // Trace only the opt-in fixture. Keep actual post, handler, execution,
+        // audit and run-loop evidence separate from the strict stage policy.
+        let activities = CFRunLoopActivity.beforeWaiting.rawValue | CFRunLoopActivity.afterWaiting.rawValue
+        runLoopObserver = CFRunLoopObserverCreateWithHandler(kCFAllocatorDefault, activities, true, 0) { _, activity in
+            ForegroundSmokeTrace.shared?.runLoopBoundary(activity == .beforeWaiting ? "beforeWaiting" : "afterWaiting")
+        }
+        if let runLoopObserver { CFRunLoopAddObserver(CFRunLoopGetMain(), runLoopObserver, .commonModes) }
         stageStartedAt = startedAt
         overallDeadline = startedAt + Self.totalTimeout
         // A stalled main queue/run loop must not extend the overall time bound.
         // Normal failures still capture the fixture window on the main thread.
+        // Diagnostic I/O is best effort and can block, so run it separately just
+        // before the deadline. The terminating callback takes no locks or I/O.
+        DispatchQueue(label: "FlowGesture.foregroundSmoke.watchdogDiagnostics", qos: .utility).asyncAfter(deadline: .now() + max(0, overallDeadline - ProcessInfo.processInfo.systemUptime - 0.25)) {
+            fputs("INFO: foreground rule smoke approaching its 15s global deadline; diagnostic output is best effort\n", stderr)
+            ForegroundSmokeTrace.shared?.dump(reason: "approaching global deadline", ifAvailable: true)
+        }
         DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + max(0, overallDeadline - ProcessInfo.processInfo.systemUptime)) {
-            fputs("FAIL: foreground rule smoke exceeded its 15s global deadline (independent watchdog)\n", stderr)
             _exit(1)
         }
         let output = Action.shortcut(KeyboardShortcut(keyCode: Self.sideOutputKey, modifiers: [.command, .option]))
@@ -73,6 +87,7 @@ final class ForegroundRuleSmoke {
                     let observed = ActionEvent(type: type, keyCode: event.getIntegerValueField(.keyboardEventKeycode))
                     smoke.observedActions.append(observed)
                     let now = ProcessInfo.processInfo.systemUptime
+                    ForegroundSmokeTrace.forEvent(event)?.record("action.audit \(observed)", at: now)
                     smoke.observeStage?("action audit")
                     print("INFO: foreground audit +\(ForegroundRuleSmoke.seconds(now - smoke.startedAt))s: \(observed); actionEvents=\(smoke.actionEvents), stage=\(smoke.stage)")
                 }
@@ -155,12 +170,14 @@ final class ForegroundRuleSmoke {
         guard root.bounds.contains(root.convert(inWindow, from: nil)) else { fail("pause point is outside settings content"); return }
         guard postMouse(type: .leftMouseDown, point: point, button: 0) else { return }
         // Give AppKit a distinct down/up pair rather than two same-turn posts.
+        ForegroundSmokeTrace.shared?.record("fixture.pause-up.scheduled delay=0.040s")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) {
             guard self.postMouse(type: .leftMouseUp, point: point, button: 0) else { return }
             self.waitForStage("pause control", expected: Self.allEvents, failure: "left-button rule blocked the settings pause control or the control did not receive the click", condition: {
                 !self.model.isEnabled && self.actionEvents == 4 && self.model.lastEvent == "foreground-key"
             }) {
                 self.finished = true
+                ForegroundSmokeTrace.shared?.dump(reason: "passed")
                 print("PASS: foreground side-button and keyboard mappings executed; text editing and pause-control clicks remained usable")
                 exit(0)
             }
@@ -188,6 +205,7 @@ final class ForegroundRuleSmoke {
         stageTimer?.invalidate()
         stage = name
         stageStartedAt = ProcessInfo.processInfo.systemUptime
+        ForegroundSmokeTrace.shared?.record("stage.begin \(name)", at: stageStartedAt)
         let deadline = min(stageStartedAt + Self.stageTimeout, overallDeadline)
         stageWait = ForegroundSmokeStageWait(expected: expected, deadline: deadline,
                                             overallDeadline: overallDeadline, settleInterval: Self.settleInterval)
@@ -200,6 +218,7 @@ final class ForegroundRuleSmoke {
             let now = ProcessInfo.processInfo.systemUptime
             self.stageWait?.observe(events: self.observedActions, condition: matches, at: now)
             if let match = self.stageWait?.matchingSince, match != previousMatch {
+                ForegroundSmokeTrace.shared?.record("stage.predicate-matched \(self.stage) via=\(source)", at: match)
                 print("INFO: foreground stage=\(self.stage) first matched at +\(Self.seconds(match - self.startedAt))s via \(source)")
             }
         }
@@ -259,15 +278,21 @@ final class ForegroundRuleSmoke {
         }
         event.setIntegerValueField(.mouseEventButtonNumber, value: button)
         event.setIntegerValueField(.mouseEventClickState, value: 1)
+        event.setIntegerValueField(.eventSourceUserData, value: ForegroundSmokeTrace.inputTag)
         event.flags = []
+        ForegroundSmokeTrace.shared?.record("fixture.post.begin \(ForegroundSmokeTrace.describe(event))")
         event.post(tap: .cghidEventTap)
+        ForegroundSmokeTrace.shared?.record("fixture.post.end \(ForegroundSmokeTrace.describe(event))")
         return true
     }
     @MainActor private func key(code: CGKeyCode, flags: CGEventFlags) {
         for down in [true, false] {
             guard let event = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: down) else { fail("key event unavailable"); return }
             event.flags = flags
+            event.setIntegerValueField(.eventSourceUserData, value: ForegroundSmokeTrace.inputTag)
+            ForegroundSmokeTrace.shared?.record("fixture.post.begin \(ForegroundSmokeTrace.describe(event))")
             event.post(tap: .cghidEventTap)
+            ForegroundSmokeTrace.shared?.record("fixture.post.end \(ForegroundSmokeTrace.describe(event))")
         }
     }
     @MainActor private func fail(_ reason: String) {
@@ -275,6 +300,8 @@ final class ForegroundRuleSmoke {
         finished = true
         stageTimer?.invalidate()
         let now = ProcessInfo.processInfo.systemUptime
+        ForegroundSmokeTrace.shared?.record("stage.failed \(stage)", at: now)
+        ForegroundSmokeTrace.shared?.dump(reason: "failure")
         let observedMatch = stageWait?.matchingSince.map { "+\(Self.seconds($0 - startedAt))s" } ?? "none"
         fputs("FAIL: \(reason); stage=\(stage), stageElapsed=\(Self.seconds(now - stageStartedAt))s, totalElapsed=\(Self.seconds(now - startedAt))s, observedMatch=\(observedMatch), enabled=\(model.isEnabled), engineRunning=\(model.engineRunning), actionEvents=\(actionEvents), sequence=\(observedActions), auditEnabled=\(auditIsEnabled), auditDisabledReason=\(auditDisabledReason ?? "none"), lastEvent=\(model.lastEvent), active=\(NSApp.isActive), keySettings=\(settingsWindow?.isKeyWindow == true); \(pointerDiagnostics)\n", stderr)
         captureFailureWindow()

@@ -140,6 +140,10 @@ final class EventEngine {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             flushPending(); completeClicks(count: nil, replay: true); if let tap { CGEvent.tapEnable(tap: tap, enable: true) }; return Unmanaged.passUnretained(event)
         }
+        // Disabled-tap notifications do not provide normal event payloads.
+        let smokeTrace = ForegroundSmokeTrace.forEvent(event)
+        smokeTrace?.record("engine.handle.begin \(ForegroundSmokeTrace.describe(event))")
+        defer { smokeTrace?.record("engine.handle.end \(ForegroundSmokeTrace.describe(event))") }
         if event.getIntegerValueField(.eventSourceUserData) == Self.syntheticTag { return Unmanaged.passUnretained(event) }
         if type == .keyUp, swallowedKeys.remove(UInt16(event.getIntegerValueField(.keyboardEventKeycode))) != nil { return nil }
         let foreground = NSWorkspace.shared.frontmostApplication
@@ -269,10 +273,18 @@ final class EventEngine {
         guard let rule = matches.first?.element, !rule.actions.isEmpty else { return false }
         let generation = configurationGeneration
         let foreground = foregroundGeneration
+        let smokeTrace = ForegroundSmokeTrace.forRule(rule.name)
+        smokeTrace?.record("rule.enqueue \(rule.name)")
         DispatchQueue.main.async { [weak self] in
+            smokeTrace?.record("rule.dequeue \(rule.name)")
             guard let self, self.isRunning, self.configurationGeneration == generation,
-                  self.foregroundGeneration == foreground else { return }
-            self.onEvent?(rule.name); self.executor.execute(rule.actions, targetApplication: targetApplication)
+                  self.foregroundGeneration == foreground else {
+                smokeTrace?.record("rule.cancelled \(rule.name)")
+                return
+            }
+            self.onEvent?(rule.name)
+            smokeTrace?.record("rule.model-updated \(rule.name)")
+            self.executor.execute(rule.actions, targetApplication: targetApplication, smokeTrace: smokeTrace)
         }
         return true
     }
