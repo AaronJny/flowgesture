@@ -344,6 +344,23 @@ enum DockSmokeFullscreenPhase: String, Codable {
     var canCloseWithoutTransition: Bool { self == .windowed }
     var transitioning: Bool { self == .entering || self == .exiting }
     func invalidatesFixture(duringExperiment: Bool) -> Bool { duringExperiment && self != .fullscreen }
+    func canRequestExit(styleIsFullscreen: Bool, windowOnActiveSpace: Bool,
+                        windowIsKey: Bool, applicationIsActive: Bool) -> Bool {
+        self == .fullscreen && styleIsFullscreen && windowOnActiveSpace && windowIsKey && applicationIsActive
+    }
+}
+
+enum DockSmokePlan {
+    static let controlModes: [DockSmokeFixture.Mode] = [.forward, .forward, .consume, .forward]
+    static let completeModes: [DockSmokeFixture.Mode] = controlModes + [.forward]
+    /// This fifth round is planned before execution, never a failure recovery.
+    /// Mode/order, completed terminal posts, successful checks, and the known
+    /// desktop origin must all be established before another sequence is allowed.
+    static func permitsPlannedReturn(modes: [DockSmokeFixture.Mode], passed: [Bool],
+                                     postedPhaseCounts: [Int], hasFailures: Bool, atDesktop: Bool) -> Bool {
+        !hasFailures && atDesktop && modes == controlModes &&
+            passed.count == 4 && passed.allSatisfy({ $0 }) && postedPhaseCounts == [3, 3, 3, 3]
+    }
 }
 
 @MainActor
@@ -357,6 +374,8 @@ final class SyntheticDockConsumerSmoke: NSObject, NSWindowDelegate {
         let anchorWindowVisible: Bool
         let spaceNotifications: Int
         let fullscreenPhase: DockSmokeFullscreenPhase
+        let fullscreenWindowIsKey: Bool
+        let applicationIsActive: Bool
         let applicationIsRunning: Bool
     }
     struct Round: Codable {
@@ -371,7 +390,9 @@ final class SyntheticDockConsumerSmoke: NSObject, NSWindowDelegate {
         var passed = false
     }
     struct Report: Codable {
-        let schemaVersion = 3
+        let schemaVersion = 4
+        let plannedRoundModes = DockSmokePlan.completeModes
+        let plannedReturnPurpose = "fifth forward-right control returns to the owned fullscreen Space before normal AppKit exit; allowed only after four successful controls, never after a failure"
         let packetSourceState = "privateState (synthetic only; no PID override)"
         let progressStorageModel = "field 124 only: setter receives original ISS Double; construction requires exact Double(Float(requested)); received payload must exactly match the prebuilt observed snapshot"
         let applicationLifecycle = "independent executable with NSApplication.run and async delegate-driven state"
@@ -399,7 +420,9 @@ final class SyntheticDockConsumerSmoke: NSObject, NSWindowDelegate {
         var fullscreenEnteredAt: Double?
         var fullscreenLifecycle: [WindowState] = []
         var cleanupDeferredForUnsettledFullscreen = false
+        var cleanupDeferredForUnsafeFullscreenExit = false
         var fullscreenSettled: WindowState?
+        var cleanupPrepared: WindowState?
         var cleanupBefore: WindowState?
         var cleanupAfter: WindowState?
         var ownedWindowNumbers: [Int] = []
@@ -480,11 +503,35 @@ final class SyntheticDockConsumerSmoke: NSObject, NSWindowDelegate {
             try await round("forward-right-restore", direction: .right, mode: .forward, startsFullscreen: false)
             try await round("consume-left-no-movement", direction: .left, mode: .consume, startsFullscreen: true)
             try await round("forward-left-after-consumption", direction: .left, mode: .forward, startsFullscreen: true)
+            guard DockSmokePlan.permitsPlannedReturn(modes: report.rounds.map(\.mode),
+                passed: report.rounds.map(\.passed), postedPhaseCounts: report.rounds.map(\.postedPhaseCount),
+                hasFailures: !report.failures.isEmpty || !chain.failures.isEmpty, atDesktop: atDesktop) else {
+                throw DockSmokeFixture.Failure("planned final return requires four intact successful controls; no recovery gesture was posted")
+            }
+            try await round("forward-right-return-for-cleanup", direction: .right, mode: .forward, startsFullscreen: false)
+            guard atFullscreen, report.failures.isEmpty, chain.failures.isEmpty else {
+                throw DockSmokeFixture.Failure("planned return did not leave an intact owned fullscreen fixture")
+            }
+            // Only after the successful return, and only while already on its
+            // Space, focus our own window for normal AppKit fullscreen exit.
+            // Failure cleanup never performs activation or any input repair.
+            currentStage = "prepare-owned-window-cleanup"
+            fullscreen?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            try await wait(timeout: 3, stable: 0.2) {
+                self.atFullscreen && self.fullscreen?.isKeyWindow == true && NSApp.isActive
+            }
+            report.cleanupPrepared = state()
             await cleanup()
-            guard report.rounds.count == 4,
+            guard report.rounds.count == 5,
                   report.rounds.allSatisfy({ $0.passed && $0.postedPhaseCount == 3 }),
-                  report.rounds.map(\.mode) == [.forward, .forward, .consume, .forward],
+                  report.rounds.reduce(0, { $0 + $1.postedPhaseCount }) == 15,
+                  report.rounds.map(\.mode) == DockSmokePlan.completeModes,
+                  report.receipts.count == 42,
                   report.receipts.filter(\.consumed).count == 3,
+                  report.cleanupBefore?.fullscreenWindowOnActiveSpace == true,
+                  report.cleanupBefore?.fullscreenWindowIsKey == true,
+                  report.cleanupBefore?.applicationIsActive == true,
                   report.invalidatedTaps == 3, report.ownedWindowsClosed, report.failures.isEmpty else {
                 throw DockSmokeFixture.Failure("synthetic smoke invariants or owned fixture cleanup were incomplete")
             }
@@ -550,6 +597,8 @@ final class SyntheticDockConsumerSmoke: NSObject, NSWindowDelegate {
             fullscreenWindowVisible: fullscreen?.isVisible ?? false,
             anchorWindowVisible: anchor?.isVisible ?? false,
             spaceNotifications: notificationCount, fullscreenPhase: fullscreenPhase,
+            fullscreenWindowIsKey: fullscreen?.isKeyWindow ?? false,
+            applicationIsActive: NSApp?.isActive ?? false,
             applicationIsRunning: NSApp?.isRunning ?? false)
     }
     private func newTag() -> Int64 {
@@ -634,16 +683,27 @@ final class SyntheticDockConsumerSmoke: NSObject, NSWindowDelegate {
             try? await Task.sleep(nanoseconds: 20_000_000)
         }
         if fullscreenPhase == .fullscreen {
-            transitionFullscreen(.exiting)
-            fullscreen?.toggleFullScreen(nil)
-            let exitDeadline = ProcessInfo.processInfo.systemUptime + 5
-            while !fullscreenPhase.canCloseWithoutTransition && ProcessInfo.processInfo.systemUptime < exitDeadline {
-                try? await Task.sleep(nanoseconds: 20_000_000)
+            if fullscreenPhase.canRequestExit(styleIsFullscreen: fullscreen?.styleMask.contains(.fullScreen) == true,
+                                              windowOnActiveSpace: atFullscreen,
+                                              windowIsKey: fullscreen?.isKeyWindow == true,
+                                              applicationIsActive: NSApp?.isActive == true) {
+                transitionFullscreen(.exiting)
+                fullscreen?.toggleFullScreen(nil)
+                let exitDeadline = ProcessInfo.processInfo.systemUptime + 5
+                while !fullscreenPhase.canCloseWithoutTransition && ProcessInfo.processInfo.systemUptime < exitDeadline {
+                    try? await Task.sleep(nanoseconds: 20_000_000)
+                }
+            } else {
+                // The 1989f43 run failed AppKit exit after all four controls
+                // passed, while the owned fullscreen window was inactive.
+                // No failed run may send a return/repair sequence to fix that.
+                report.cleanupDeferredForUnsafeFullscreenExit = true
+                report.failures.append("owned fullscreen fixture is not intact, active, and key; skip exit rather than activate, repair, or force-close; discard runner session")
             }
         }
         if fullscreenPhase.canCloseWithoutTransition {
             fullscreen?.close()
-        } else {
+        } else if !report.cleanupDeferredForUnsafeFullscreenExit {
             report.cleanupDeferredForUnsettledFullscreen = true
             report.failures.append("owned fullscreen transition did not settle; do not close mid-transition; process exit discards this runner session")
         }

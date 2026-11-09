@@ -106,7 +106,48 @@ final class SyntheticDockConsumerSmokeTests: XCTestCase {
         for phase in phases {
             XCTAssertEqual(phase.invalidatesFixture(duringExperiment: true), phase != .fullscreen)
             XCTAssertFalse(phase.invalidatesFixture(duringExperiment: false))
+            for style in [false, true] {
+                for active in [false, true] {
+                    for key in [false, true] {
+                        for appActive in [false, true] {
+                            XCTAssertEqual(phase.canRequestExit(styleIsFullscreen: style, windowOnActiveSpace: active,
+                                                               windowIsKey: key, applicationIsActive: appActive),
+                                           phase == .fullscreen && style && active && key && appActive)
+                        }
+                    }
+                }
+            }
         }
+    }
+
+    func testPlannedReturnRequiresFourCompleteSuccessfulControlsWithoutFailures() {
+        func permits(modes: [DockSmokeFixture.Mode] = DockSmokePlan.controlModes,
+                     passed: [Bool] = [true, true, true, true], posts: [Int] = [3, 3, 3, 3],
+                     failed: Bool = false, desktop: Bool = true) -> Bool {
+            DockSmokePlan.permitsPlannedReturn(modes: modes, passed: passed,
+                postedPhaseCounts: posts, hasFailures: failed, atDesktop: desktop)
+        }
+        XCTAssertTrue(permits())
+        XCTAssertEqual(DockSmokePlan.completeModes, [.forward, .forward, .consume, .forward, .forward])
+        XCTAssertFalse(permits(failed: true), "never send a recovery sequence after an error")
+        XCTAssertFalse(permits(desktop: false), "require the verified desktop origin")
+        XCTAssertFalse(permits(modes: [.forward, .forward, .forward, .forward]))
+        for index in 0..<4 {
+            var failedControl = [true, true, true, true]
+            failedControl[index] = false
+            XCTAssertFalse(permits(passed: failedControl))
+            for incompleteCount in [0, 1, 2, 4] {
+                var incompletePosts = [3, 3, 3, 3]
+                incompletePosts[index] = incompleteCount
+                XCTAssertFalse(permits(posts: incompletePosts))
+            }
+        }
+        for count in [0, 1, 2, 3, 5] {
+            XCTAssertFalse(permits(passed: Array(repeating: true, count: count)))
+            XCTAssertFalse(permits(posts: Array(repeating: 3, count: count)))
+        }
+        XCTAssertFalse(permits(modes: Array(DockSmokePlan.controlModes.dropLast())))
+        XCTAssertFalse(permits(modes: DockSmokePlan.completeModes), "a second return is forbidden")
     }
 
     func testConstructionRejectsMissingDuplicateOrZeroTagsBeforeAnyPost() {
