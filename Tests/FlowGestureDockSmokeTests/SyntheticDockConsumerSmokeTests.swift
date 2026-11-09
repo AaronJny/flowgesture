@@ -37,9 +37,37 @@ final class SyntheticDockConsumerSmokeTests: XCTestCase {
                 XCTAssertEqual(fields.hidType, 23)
                 XCTAssertEqual(fields.axis, 1)
                 XCTAssertEqual(fields.flags, 0)
-                XCTAssertEqual(fields.progress, Double(direction.rawValue) * 0.000016)
+                XCTAssertEqual(packet.progressStorage.requested, Double(direction.rawValue) * 0.000016)
+                XCTAssertEqual(fields.progress, Double(Float(packet.progressStorage.requested)))
+                XCTAssertEqual(packet.progressStorage.observedStored, fields.progress)
+                XCTAssertTrue(packet.progressStorage.observedDiffersFromRequested)
+                XCTAssertTrue(packet.progressStorage.matchesExpectedStored)
                 XCTAssertEqual(fields.velocityX, Double(direction.rawValue) * 2000)
                 XCTAssertEqual(fields.velocityY, Double(direction.rawValue) * 2000)
+            }
+        }
+    }
+
+    func testProgressStorageAcceptsOnlyTheExactSinglePrecisionRoundTrip() {
+        let directions: [DockSmokeFixture.Direction] = [.left, .right]
+        for direction in directions {
+            let requested = Double(direction.rawValue) * 0.000016
+            let stored = Double(Float(requested))
+            XCTAssertEqual(abs(stored), 1.5999999959603883e-05, "pinned observed round trip")
+            let accepted = DockSmokeFixture.ProgressStorage(direction: direction, observedStored: stored)
+            XCTAssertEqual(accepted.requested, requested)
+            XCTAssertEqual(accepted.expectedStored, stored)
+            XCTAssertTrue(accepted.matchesExpectedStored)
+            XCTAssertTrue(accepted.observedDiffersFromRequested)
+            // Even a one-ULP Double difference is forbidden. Adjacent Float
+            // values, the unrounded recipe, nonfinite values, and wrong signs
+            // are not alternatives to this one observed storage model.
+            let rejected: [Double] = [requested, stored.nextUp, stored.nextDown,
+                Double(Float(requested).nextUp), Double(Float(requested).nextDown),
+                0, -stored, .nan, .infinity, -.infinity]
+            for value in rejected {
+                XCTAssertFalse(DockSmokeFixture.ProgressStorage(direction: direction,
+                    observedStored: value).matchesExpectedStored, "unexpected stored value \(value)")
             }
         }
     }
@@ -56,8 +84,14 @@ final class SyntheticDockConsumerSmokeTests: XCTestCase {
         XCTAssertTrue(diagnostics.contains { $0.hasPrefix("velocityX129: actual=") })
         XCTAssertTrue(diagnostics.contains { $0.hasPrefix("velocityY130: actual=") })
         XCTAssertEqual(diagnostics.count, 6)
-        XCTAssertEqual(DockSmokeFixture.constructionMismatches(packet.posted, phase: 1,
-            direction: .right, tag: 41, pid: Int64(getpid()), includeMatches: true).count, 11)
+        let allFields = DockSmokeFixture.constructionMismatches(packet.posted, phase: 1,
+            direction: .right, tag: 41, pid: Int64(getpid()), includeMatches: true)
+        XCTAssertEqual(allFields.count, 11)
+        let progress = try XCTUnwrap(allFields.first { $0.hasPrefix("progress124:") })
+        XCTAssertTrue(progress.contains("expectedStored="))
+        XCTAssertTrue(progress.contains("requested="))
+        XCTAssertTrue(progress.contains("model=Double(Float(requested))"))
+        XCTAssertTrue(progress.contains("differsFromRequested=true"))
     }
 
     func testFullscreenCleanupCannotCloseDuringUnsettledTransition() {
@@ -135,5 +169,10 @@ final class SyntheticDockConsumerSmokeTests: XCTestCase {
             copy.setDoubleValueField(field, value: 0)
             XCTAssertFalse(DockSmokeFixture.Fields(copy).matchesPayload(packet.posted))
         }
+        let adjacentProgress = try XCTUnwrap(packet.event.copy())
+        adjacentProgress.setDoubleValueField(CGEventField(rawValue: 124)!,
+            value: Double(Float(packet.posted.progress).nextUp))
+        XCTAssertFalse(DockSmokeFixture.Fields(adjacentProgress).matchesPayload(packet.posted),
+                       "transport comparison must not round or allow nearby progress values")
     }
 }

@@ -32,6 +32,26 @@ enum DockSmokeFixture {
     }
     enum Mode: String, Codable { case forward, consume }
     enum Direction: Int, Codable { case left = -1, right = 1 }
+    static func requestedProgress(for direction: Direction) -> Double {
+        Double(direction.rawValue) * 0.000016
+    }
+    struct ProgressStorage: Codable {
+        let requested: Double
+        let expectedStored: Double
+        let observedStored: Double
+        let observedDiffersFromRequested: Bool
+        let matchesExpectedStored: Bool
+        init(direction: Direction, observedStored: Double) {
+            requested = DockSmokeFixture.requestedProgress(for: direction)
+            // The b75341f hosted fixture diagnostics observed this exact round
+            // trip for field 124. This is a restricted fixture model, not a claim
+            // about the private ABI. No epsilon or range of nearby values passes.
+            expectedStored = Double(Float(requested))
+            self.observedStored = observedStored
+            observedDiffersFromRequested = observedStored != requested
+            matchesExpectedStored = observedStored.isFinite && observedStored == expectedStored
+        }
+    }
     struct Fields: Codable, Equatable {
         let eventType: UInt32
         let tag: Int64
@@ -68,6 +88,7 @@ enum DockSmokeFixture {
     struct Packet {
         let event: CGEvent
         let posted: Fields
+        let progressStorage: ProgressStorage
     }
     struct Batch {
         let name: String
@@ -105,7 +126,8 @@ enum DockSmokeFixture {
             for (field, value) in [(UInt32(55), Int64(30)), (110, 23), (123, 1), (132, phase)] {
                 event.setIntegerValueField(CGEventField(rawValue: field)!, value: value)
             }
-            event.setDoubleValueField(CGEventField(rawValue: 124)!, value: sign * 0.000016)
+            // Submit the ISS recipe's original Double, not the rounded value.
+            event.setDoubleValueField(CGEventField(rawValue: 124)!, value: requestedProgress(for: direction))
             event.setDoubleValueField(CGEventField(rawValue: 129)!, value: sign * 2000)
             event.setDoubleValueField(CGEventField(rawValue: 130)!, value: sign * 2000)
             event.setIntegerValueField(.eventSourceUserData, value: tags[index])
@@ -118,7 +140,8 @@ enum DockSmokeFixture {
                 throw Failure("legacy packet construction mismatch: " + mismatches.joined(separator: "; ") +
                               ". All field checks: " + allFields.joined(separator: "; "))
             }
-            return Packet(event: event, posted: fields)
+            return Packet(event: event, posted: fields,
+                          progressStorage: ProgressStorage(direction: direction, observedStored: fields.progress))
         }
         return Batch(name: name, direction: direction, mode: mode, packets: packets)
     }
@@ -126,17 +149,26 @@ enum DockSmokeFixture {
                                        tag: Int64, pid: Int64, includeMatches: Bool = false) -> [String] {
         let sign = Double(direction.rawValue)
         func precise(_ value: Double) -> String { String(format: "%.17g", value) }
-        let expected: [(String, String, String)] = [
-            ("eventType", String(fields.eventType), "30"), ("selector55", String(fields.selector), "30"),
-            ("hidType110", String(fields.hidType), "23"), ("axis123", String(fields.axis), "1"),
-            ("phase132", String(fields.phase), String(phase)), ("flags", String(fields.flags), "0"),
-            ("sourcePID", String(fields.pid), String(pid)), ("sourceTag", String(fields.tag), String(tag)),
-            ("progress124", precise(fields.progress), precise(sign * 0.000016)),
-            ("velocityX129", precise(fields.velocityX), precise(sign * 2000)),
-            ("velocityY130", precise(fields.velocityY), precise(sign * 2000))
+        let progress = ProgressStorage(direction: direction, observedStored: fields.progress)
+        let expected: [(String, String, String, Bool)] = [
+            ("eventType", String(fields.eventType), "30", fields.eventType == 30),
+            ("selector55", String(fields.selector), "30", fields.selector == 30),
+            ("hidType110", String(fields.hidType), "23", fields.hidType == 23),
+            ("axis123", String(fields.axis), "1", fields.axis == 1),
+            ("phase132", String(fields.phase), String(phase), fields.phase == phase),
+            ("flags", String(fields.flags), "0", fields.flags == 0),
+            ("sourcePID", String(fields.pid), String(pid), fields.pid == pid),
+            ("sourceTag", String(fields.tag), String(tag), fields.tag == tag),
+            ("progress124", precise(fields.progress), precise(progress.expectedStored), progress.matchesExpectedStored),
+            ("velocityX129", precise(fields.velocityX), precise(sign * 2000), fields.velocityX == sign * 2000),
+            ("velocityY130", precise(fields.velocityY), precise(sign * 2000), fields.velocityY == sign * 2000)
         ]
-        return expected.compactMap { name, actual, expected in
-            actual == expected && !includeMatches ? nil : "\(name): actual=\(actual), expected=\(expected)"
+        return expected.compactMap { name, actual, expected, matches in
+            guard !matches || includeMatches else { return nil }
+            if name == "progress124" {
+                return "\(name): actual=\(actual), expectedStored=\(expected), requested=\(precise(progress.requested)), model=Double(Float(requested)), differsFromRequested=\(progress.observedDiffersFromRequested)"
+            }
+            return "\(name): actual=\(actual), expected=\(expected)"
         }
     }
 
@@ -313,14 +345,16 @@ final class SyntheticDockConsumerSmoke: NSObject, NSWindowDelegate {
         let mode: DockSmokeFixture.Mode
         let direction: DockSmokeFixture.Direction
         let postedFields: [DockSmokeFixture.Fields]
+        let progressStorage: [DockSmokeFixture.ProgressStorage]
         let before: WindowState
         var postedPhaseCount = 0
         var after: WindowState?
         var passed = false
     }
     struct Report: Codable {
-        let schemaVersion = 2
+        let schemaVersion = 3
         let packetSourceState = "privateState (synthetic only; no PID override)"
+        let progressStorageModel = "field 124 only: setter receives original ISS Double; construction requires exact Double(Float(requested)); received payload must exactly match the prebuilt observed snapshot"
         let applicationLifecycle = "independent executable with NSApplication.run and async delegate-driven state"
         let evidenceScope = "synthetic-Dock-consumer-smoke-only"
         let provesPhysicalSuppression = false
@@ -517,7 +551,8 @@ final class SyntheticDockConsumerSmoke: NSObject, NSWindowDelegate {
         let before = state()
         let index = report.rounds.count
         report.rounds.append(Round(name: name, mode: mode, direction: direction,
-                                   postedFields: batch.packets.map(\.posted), before: before))
+                                   postedFields: batch.packets.map(\.posted),
+                                   progressStorage: batch.packets.map(\.progressStorage), before: before))
         defer { report.rounds[index].after = state() }
         // All allocations/field validation are done. No throw, conditional break,
         // mode change or run-loop pumping can truncate this began/changed/ended.
