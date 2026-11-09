@@ -32,3 +32,12 @@ FlowGesture is a native macOS app for custom gestures, smoother scrolling and ev
 **First launch:** If macOS says the developer cannot be verified, first confirm you downloaded the app from this repository’s Releases. After trying to open it, go to **System Settings → Privacy & Security → Open Anyway**, then confirm **Open**, following [Apple’s instructions](https://support.apple.com/en-us/102445). This allows the app to open; **Accessibility** and **Input Monitoring** permissions are granted separately in step 3.
 
 You can pause or quit from the menu bar at any time. AppleScript actions that control another app may also request **Automation** permission.
+
+## Avoid duplicate touch actions
+
+FlowGesture does not suppress native macOS touch gestures. The same gesture can run both actions, so choose which one to keep:
+
+- **Use the FlowGesture action:** check the overlap advice in the rule editor, click **Open System Settings**, and manually turn off the corresponding system gesture. Three/four-finger horizontal swipes usually map to **Trackpad → More Gestures → Swipe between full-screen applications**; up/down swipes map to **Mission Control** or **App Exposé**. Names and finger assignments can vary by macOS version.
+- **Keep the system action:** click **Disable this rule** in the rule editor, then save. Cancel leaves the saved rule unchanged. Disable other rules for the same gesture as well.
+
+For Magic Mouse, use **System Settings → Mouse → More Gestures**. Some inputs, such as two-finger scrolling, may have no separate off switch; choose another gesture or disable the corresponding rule instead. App scopes and modifiers limit FlowGesture only. FlowGesture does not automatically read or change these system settings.

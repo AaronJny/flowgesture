@@ -66,6 +66,6 @@ Artifact names include the runner label so parallel jobs cannot overwrite one
 another. Concurrency cancels superseded runs on the same ref. Historical run/artifact
 deletion is not automatic; useful diagnostic logs and the current build are retained.
 
-The [no-connection verification route](no-connection-verification.md) distinguishes
-synthetic replay, external browser fixtures, cloud CI, and optional self-run checks.
-It does not require remote access to a personal computer.
+The test build keeps the existing application checks and does not require access
+to a personal computer. Standalone capture and synthetic Dock/Quartz experiments
+are not part of this minimal delivery.

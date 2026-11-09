@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 @testable import FlowGestureCore
 
@@ -37,5 +38,20 @@ final class TouchGestureOverlapTests: XCTestCase {
     func testMouseSingleFingerSwipeWarnsAboutScrollingAndPages() {
         let trigger = TouchGestureTrigger(gesture: .swipe(fingers: 1, direction: .left), device: .mouse)
         XCTAssertEqual(TouchGestureOverlap.possible(for: trigger), [.mouseScroll, .mousePages])
+    }
+
+    func testDisabledTouchRuleStaysDisabledAfterSaveAndDoesNotMatch() throws {
+        let trigger = InputTrigger.touch(TouchGestureTrigger(gesture: .swipe(fingers: 3, direction: .left), device: .trackpad))
+        let saved = Rule(name: "Custom swipe", trigger: trigger, actions: [.system(.missionControl)])
+        var draft = saved
+        draft.isEnabled = false
+        // Editing the draft does not change the original; cancelling drops the draft.
+        XCTAssertTrue(saved.isEnabled)
+        let restored = try JSONDecoder().decode(Rule.self, from: JSONEncoder().encode(draft))
+        XCTAssertFalse(restored.isEnabled)
+        XCTAssertEqual(restored.trigger, saved.trigger)
+        XCTAssertEqual(restored.actions, saved.actions)
+        XCTAssertNil(RuleMatcher.bestMatch(for: trigger, in: "com.example.editor", rules: [restored]))
+        XCTAssertEqual(RuleMatcher.bestMatch(for: trigger, in: "com.example.editor", rules: [saved])?.id, saved.id)
     }
 }

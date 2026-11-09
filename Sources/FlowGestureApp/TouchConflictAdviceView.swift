@@ -1,9 +1,12 @@
+import AppKit
 import SwiftUI
 import FlowGestureCore
 
 struct TouchConflictAdviceView: View {
     @EnvironmentObject private var model: AppModel
     let trigger: TouchGestureTrigger
+    @Binding var isRuleEnabled: Bool
+    @State private var settingsOpenFailed = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -19,7 +22,27 @@ struct TouchConflictAdviceView: View {
             if trigger.device != .trackpad {
                 Text(model.mappingText("For Magic Mouse, review System Settings → Mouse → More Gestures. Ordinary mice do not provide multi-finger touch input.", "Magic Mouse 请检查 系统设置 → 鼠标 → 更多手势。普通鼠标不提供多指触控输入。"))
             }
-            Text(model.mappingText("Choose another gesture, manually change an overlapping system assignment, or keep both actions. App scopes and modifiers limit FlowGesture only; they do not disable macOS gestures.", "你可以改选手势、手动调整重叠的系统手势，或保留两种动作。应用范围和修饰键只限制 FlowGesture，不会停用 macOS 手势。"))
+            Text(model.mappingText("To use FlowGesture, manually turn off only the conflicting macOS gesture in System Settings. To keep the system gesture, disable this rule. App scopes and modifiers do not disable macOS gestures.", "想使用 FlowGesture：请自行在系统设置中关闭上面对应的冲突手势。想保留系统手势：停用这条规则即可。应用范围和修饰键不会停用 macOS 手势。"))
+            HStack {
+                Button(model.mappingText("Open System Settings", "打开系统设置")) {
+                    // Open the app only. Never change or infer the user's settings.
+                    guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.systempreferences") else {
+                        settingsOpenFailed = true
+                        return
+                    }
+                    settingsOpenFailed = !NSWorkspace.shared.open(url)
+                }.accessibilityIdentifier("flowgesture.touch.open.settings")
+                Button(model.mappingText("Disable this rule", "停用这条规则")) {
+                    isRuleEnabled = false
+                }.disabled(!isRuleEnabled)
+                    .accessibilityIdentifier("flowgesture.touch.keep.system")
+            }
+            if !isRuleEnabled {
+                Text(model.mappingText("This rule will be disabled when saved. Cancel leaves it unchanged. Disable any other rules for the same gesture too.", "这条规则将在保存后停用，取消则不改变原规则。如果还有相同手势的其他规则，也需分别停用。"))
+            }
+            if settingsOpenFailed {
+                Text(model.mappingText("Open System Settings from the Apple menu, then follow the path above.", "请从苹果菜单打开“系统设置”，再按上面的路径调整。"))
+            }
         }
         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         .accessibilityIdentifier("flowgesture.touch.conflict.advice")

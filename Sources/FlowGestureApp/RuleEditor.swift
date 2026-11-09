@@ -165,7 +165,7 @@ struct RuleEditor: View {
         case .draw: DrawTriggerEditor(value: caseBinding($rule.trigger, fallback: DrawGestureTrigger(), extract: { if case .draw(let value) = $0 { return value }; return nil }, embed: InputTrigger.draw))
         case .shape: ShapeTriggerEditor(value: caseBinding($rule.trigger, fallback: ShapeGestureTrigger(), extract: { if case .shape(let value) = $0 { return value }; return nil }, embed: InputTrigger.shape))
         case .keyboard: ShortcutEditor(value: caseBinding($rule.trigger, fallback: FlowGestureCore.KeyboardShortcut(), extract: { if case .keyboard(let value) = $0 { return value }; return nil }, embed: InputTrigger.keyboard))
-        case .touch: TouchTriggerEditor(value: caseBinding($rule.trigger, fallback: TouchGestureTrigger(), extract: { if case .touch(let value) = $0 { return value }; return nil }, embed: InputTrigger.touch))
+        case .touch: TouchTriggerEditor(value: caseBinding($rule.trigger, fallback: TouchGestureTrigger(), extract: { if case .touch(let value) = $0 { return value }; return nil }, embed: InputTrigger.touch), isRuleEnabled: $rule.isEnabled)
         case .screenCorner: CornerTriggerEditor(value: caseBinding($rule.trigger, fallback: ScreenCornerTrigger(), extract: { if case .screenCorner(let value) = $0 { return value }; return nil }, embed: InputTrigger.screenCorner))
         }
     }
@@ -522,6 +522,7 @@ private struct FriendlyShortcutBuilder: View {
 private struct TouchTriggerEditor: View {
     @EnvironmentObject private var model: AppModel
     @Binding var value: TouchGestureTrigger
+    @Binding var isRuleEnabled: Bool
     private var kind: String {
         switch value.gesture { case .tap: return "Tap"; case .swipe: return "Swipe"; case .pinch: return "Pinch" }
     }
@@ -553,7 +554,7 @@ private struct TouchTriggerEditor: View {
             }
         }
         Text(model.t("Touch support depends on the connected device and macOS. Check Diagnostics for the actual backend status.")).font(.caption).foregroundStyle(.secondary)
-        TouchConflictAdviceView(trigger: value)
+        TouchConflictAdviceView(trigger: value, isRuleEnabled: $isRuleEnabled)
     }
 }
 

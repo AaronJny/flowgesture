@@ -46,6 +46,6 @@ Apple documents the [all-events mask](https://developer.apple.com/documentation/
 
 `Tests/FlowGestureAppTests/GestureDiagnosticsTests.swift` contains seven no-hardware checks: ring order/overflow, unknown-record payload minimization, identity namespace separation, duration bounds, public event-mask exclusions, recognition-name allowlisting, and an idle empty snapshot. They never call `start()`, create an event tap, request permissions, or modify system state.
 
-These diagnostic tests are part of the macOS CI suite. A CI compile/test pass still does not establish private event visibility, real sender correlation, permission behavior on physical devices, native gesture suppression, or physical timing. See the [no-connection verification report](no-connection-verification.md) for current evidence and limits.
+These diagnostic tests are part of the macOS CI suite. A CI compile/test pass still does not establish private event visibility, real sender correlation, permission behavior on physical devices, native gesture suppression, or physical timing. See the [compatibility summary](compatibility-review-2026-11-08.md) for current evidence and limits.
 
 Before any future active-consumption work, obtain a separate authorized physical-machine observation session and follow the [research acceptance gates](gesture-arbitration-research.md#5-physical-machine-validation-plan-and-acceptance-gates). No guessed private packet or event-consumption implementation is included here.
