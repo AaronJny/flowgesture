@@ -3,32 +3,9 @@ import CoreGraphics
 import Darwin
 import Foundation
 import XCTest
+@testable import FlowGestureDockSmokeHarness
 
 final class SyntheticDockConsumerSmokeTests: XCTestCase {
-    @MainActor func testOptInHostedDockConsumerSmoke() async throws {
-        let environment = ProcessInfo.processInfo.environment
-        guard environment["FLOWGESTURE_RUN_DOCK_SMOKE"] == "1" else {
-            throw XCTSkip("Synthetic Dock/Spaces posting is disabled unless explicitly selected on a dedicated disposable hosted runner")
-        }
-        let smoke = SyntheticDockConsumerSmoke()
-        let path = environment["FLOWGESTURE_DOCK_SMOKE_REPORT"] ?? "build/dock-smoke/report.json"
-        do {
-            try smoke.run()
-            try smoke.writeReport(to: path)
-        } catch {
-            try smoke.writeReport(to: path)
-            throw error
-        }
-        XCTAssertEqual(smoke.report.status, "passed")
-        XCTAssertEqual(smoke.report.rounds.count, 4)
-        XCTAssertTrue(smoke.report.rounds.allSatisfy { $0.passed && $0.postedPhaseCount == 3 })
-        XCTAssertEqual(smoke.report.rounds.map(\.mode), [.forward, .forward, .consume, .forward])
-        XCTAssertEqual(smoke.report.receipts.filter(\.consumed).count, 3)
-        XCTAssertEqual(smoke.report.invalidatedTaps, 3)
-        XCTAssertTrue(smoke.report.ownedWindowsClosed)
-        print("PASS: synthetic legacy Dock consumer forwarding/consumption/forwarding with owned fullscreen Space; NOT physical gesture suppression or raw/native correlation")
-    }
-
     func testLiveAdmissionRequiresExplicitDisposableHostedLegacyOS() {
         let permitted = ["FLOWGESTURE_RUN_DOCK_SMOKE": "1", "GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted"]
         XCTAssertNil(DockSmokeFixture.admissionReason(environment: permitted, majorVersion: 15))
@@ -64,6 +41,37 @@ final class SyntheticDockConsumerSmokeTests: XCTestCase {
                 XCTAssertEqual(fields.velocityX, Double(direction.rawValue) * 2000)
                 XCTAssertEqual(fields.velocityY, Double(direction.rawValue) * 2000)
             }
+        }
+    }
+
+    func testConstructionDiagnosticNamesActualAndExpectedSourceAndFields() throws {
+        let packet = try XCTUnwrap(DockSmokeFixture.prepare(name: "unposted", direction: .right,
+            mode: .forward, tags: [41, 42, 43]).packets.first)
+        let diagnostics = DockSmokeFixture.constructionMismatches(packet.posted, phase: 2,
+            direction: .left, tag: 999, pid: Int64(getpid()) + 1)
+        XCTAssertTrue(diagnostics.contains("phase132: actual=1, expected=2"))
+        XCTAssertTrue(diagnostics.contains("sourceTag: actual=41, expected=999"))
+        XCTAssertTrue(diagnostics.contains("sourcePID: actual=\(getpid()), expected=\(Int64(getpid()) + 1)"))
+        XCTAssertTrue(diagnostics.contains { $0.hasPrefix("progress124: actual=") })
+        XCTAssertTrue(diagnostics.contains { $0.hasPrefix("velocityX129: actual=") })
+        XCTAssertTrue(diagnostics.contains { $0.hasPrefix("velocityY130: actual=") })
+        XCTAssertEqual(diagnostics.count, 6)
+        XCTAssertEqual(DockSmokeFixture.constructionMismatches(packet.posted, phase: 1,
+            direction: .right, tag: 41, pid: Int64(getpid()), includeMatches: true).count, 11)
+    }
+
+    func testFullscreenCleanupCannotCloseDuringUnsettledTransition() {
+        XCTAssertTrue(DockSmokeFullscreenPhase.windowed.canCloseWithoutTransition)
+        let unsafe: [DockSmokeFullscreenPhase] = [.entering, .fullscreen, .exiting, .failed]
+        for phase in unsafe { XCTAssertFalse(phase.canCloseWithoutTransition) }
+        XCTAssertTrue(DockSmokeFullscreenPhase.entering.transitioning)
+        XCTAssertTrue(DockSmokeFullscreenPhase.exiting.transitioning)
+        XCTAssertFalse(DockSmokeFullscreenPhase.fullscreen.transitioning)
+        XCTAssertFalse(DockSmokeFullscreenPhase.failed.transitioning)
+        let phases: [DockSmokeFullscreenPhase] = [.windowed, .entering, .fullscreen, .exiting, .failed]
+        for phase in phases {
+            XCTAssertEqual(phase.invalidatesFixture(duringExperiment: true), phase != .fullscreen)
+            XCTAssertFalse(phase.invalidatesFixture(duringExperiment: false))
         }
     }
 

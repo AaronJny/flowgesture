@@ -185,9 +185,10 @@ jobs:
           mkdir -p build/dock-smoke
           export FLOWGESTURE_DOCK_SMOKE_REPORT="$PWD/build/dock-smoke/report.json"
           swift build --build-tests
+          FLOWGESTURE_RUN_DOCK_SMOKE=0 swift test --skip-build --filter SyntheticDockConsumerSmokeTests
           python3 - <<'PY'
           import os, signal, subprocess, sys
-          command = ['swift', 'test', '--skip-build', '--filter', 'SyntheticDockConsumerSmokeTests/testOptInHostedDockConsumerSmoke']
+          command = ['swift', 'run', '--skip-build', 'FlowGestureDockSmokeHarness']
           child = subprocess.Popen(command, start_new_session=True)
           try:
               sys.exit(child.wait(timeout=90))

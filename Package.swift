@@ -11,7 +11,8 @@ let package = Package(
         .executableTarget(name: "FlowGestureApp", dependencies: ["FlowGestureCore", "FlowGestureNative"], linkerSettings: [.linkedFramework("AppKit"), .linkedFramework("ApplicationServices")]),
         .executableTarget(name: "FlowGestureCapture", dependencies: ["FlowGestureNative"], linkerSettings: [.linkedFramework("AppKit", .when(platforms: [.macOS]))]),
         .testTarget(name: "FlowGestureCaptureTests", dependencies: ["FlowGestureCapture"]),
-        .testTarget(name: "FlowGestureDockSmokeTests", dependencies: [], linkerSettings: [.linkedFramework("AppKit"), .linkedFramework("CoreGraphics")]),
+        .executableTarget(name: "FlowGestureDockSmokeHarness", dependencies: [], path: "Tests/FlowGestureDockSmokeHarness", linkerSettings: [.linkedFramework("AppKit"), .linkedFramework("CoreGraphics")]),
+        .testTarget(name: "FlowGestureDockSmokeTests", dependencies: ["FlowGestureDockSmokeHarness"]),
         .testTarget(name: "FlowGestureCoreTests", dependencies: ["FlowGestureCore"]),
         .testTarget(name: "FlowGestureAppTests", dependencies: ["FlowGestureApp", "FlowGestureCore"], resources: [.copy("Fixtures")])
     ]

@@ -95,9 +95,12 @@ enum DockSmokeFixture {
         guard tags.count == 3, Set(tags).count == 3, tags.allSatisfy({ $0 > 0 }) else {
             throw Failure("three unique positive source tags are required before posting")
         }
+        guard let source = CGEventSource(stateID: .privateState) else {
+            throw Failure("could not create the isolated synthetic event source")
+        }
         let sign = Double(direction.rawValue)
         let packets = try [Int64(1), 2, 4].enumerated().map { index, phase -> Packet in
-            guard let event = CGEvent(source: nil) else { throw Failure("cannot construct complete legacy sequence") }
+            guard let event = CGEvent(source: source) else { throw Failure("cannot construct complete legacy sequence") }
             event.flags = []
             for (field, value) in [(UInt32(55), Int64(30)), (110, 23), (123, 1), (132, phase)] {
                 event.setIntegerValueField(CGEventField(rawValue: field)!, value: value)
@@ -107,15 +110,36 @@ enum DockSmokeFixture {
             event.setDoubleValueField(CGEventField(rawValue: 130)!, value: sign * 2000)
             event.setIntegerValueField(.eventSourceUserData, value: tags[index])
             let fields = Fields(event)
-            guard fields.eventType == 30, fields.selector == 30, fields.hidType == 23,
-                  fields.axis == 1, fields.phase == phase, fields.flags == 0,
-                  fields.pid == Int64(getpid()), fields.tag == tags[index],
-                  fields.progress == sign * 0.000016, fields.velocityX == sign * 2000,
-                  fields.velocityY == sign * 2000 else { throw Failure("legacy packet construction did not preserve every required field") }
+            let mismatches = constructionMismatches(fields, phase: phase, direction: direction,
+                                                     tag: tags[index], pid: Int64(getpid()))
+            guard mismatches.isEmpty else {
+                let allFields = constructionMismatches(fields, phase: phase, direction: direction,
+                    tag: tags[index], pid: Int64(getpid()), includeMatches: true)
+                throw Failure("legacy packet construction mismatch: " + mismatches.joined(separator: "; ") +
+                              ". All field checks: " + allFields.joined(separator: "; "))
+            }
             return Packet(event: event, posted: fields)
         }
         return Batch(name: name, direction: direction, mode: mode, packets: packets)
     }
+    static func constructionMismatches(_ fields: Fields, phase: Int64, direction: Direction,
+                                       tag: Int64, pid: Int64, includeMatches: Bool = false) -> [String] {
+        let sign = Double(direction.rawValue)
+        func precise(_ value: Double) -> String { String(format: "%.17g", value) }
+        let expected: [(String, String, String)] = [
+            ("eventType", String(fields.eventType), "30"), ("selector55", String(fields.selector), "30"),
+            ("hidType110", String(fields.hidType), "23"), ("axis123", String(fields.axis), "1"),
+            ("phase132", String(fields.phase), String(phase)), ("flags", String(fields.flags), "0"),
+            ("sourcePID", String(fields.pid), String(pid)), ("sourceTag", String(fields.tag), String(tag)),
+            ("progress124", precise(fields.progress), precise(sign * 0.000016)),
+            ("velocityX129", precise(fields.velocityX), precise(sign * 2000)),
+            ("velocityY130", precise(fields.velocityY), precise(sign * 2000))
+        ]
+        return expected.compactMap { name, actual, expected in
+            actual == expected && !includeMatches ? nil : "\(name): actual=\(actual), expected=\(expected)"
+        }
+    }
+
 }
 
 /// Independent TEST-ONLY tap path. It imports neither production routing nor the
@@ -264,8 +288,15 @@ final class DockSmokeTapChain {
     }
 }
 
+enum DockSmokeFullscreenPhase: String, Codable {
+    case windowed, entering, fullscreen, exiting, failed
+    var canCloseWithoutTransition: Bool { self == .windowed }
+    var transitioning: Bool { self == .entering || self == .exiting }
+    func invalidatesFixture(duringExperiment: Bool) -> Bool { duringExperiment && self != .fullscreen }
+}
+
 @MainActor
-final class SyntheticDockConsumerSmoke: NSObject {
+final class SyntheticDockConsumerSmoke: NSObject, NSWindowDelegate {
     struct WindowState: Codable {
         let stage: String
         let uptime: Double
@@ -274,6 +305,8 @@ final class SyntheticDockConsumerSmoke: NSObject {
         let fullscreenWindowVisible: Bool
         let anchorWindowVisible: Bool
         let spaceNotifications: Int
+        let fullscreenPhase: DockSmokeFullscreenPhase
+        let applicationIsRunning: Bool
     }
     struct Round: Codable {
         let name: String
@@ -286,7 +319,9 @@ final class SyntheticDockConsumerSmoke: NSObject {
         var passed = false
     }
     struct Report: Codable {
-        let schemaVersion = 1
+        let schemaVersion = 2
+        let packetSourceState = "privateState (synthetic only; no PID override)"
+        let applicationLifecycle = "independent executable with NSApplication.run and async delegate-driven state"
         let evidenceScope = "synthetic-Dock-consumer-smoke-only"
         let provesPhysicalSuppression = false
         let provesRawNativeCorrelation = false
@@ -307,7 +342,10 @@ final class SyntheticDockConsumerSmoke: NSObject {
         var failures: [String] = []
         var rounds: [Round] = []
         var spaceChanges: [WindowState] = []
+        var applicationDidFinishLaunchingAt: Double?
         var fullscreenEnteredAt: Double?
+        var fullscreenLifecycle: [WindowState] = []
+        var cleanupDeferredForUnsettledFullscreen = false
         var fullscreenSettled: WindowState?
         var cleanupBefore: WindowState?
         var cleanupAfter: WindowState?
@@ -323,7 +361,7 @@ final class SyntheticDockConsumerSmoke: NSObject {
     private let chain = DockSmokeTapChain()
     private var anchor: NSWindow?
     private var fullscreen: NSWindow?
-    private var fullScreenEntered = false
+    private var fullscreenPhase: DockSmokeFullscreenPhase = .windowed
     private var notificationCount = 0
     private var lastSpaceChange = 0.0
     private var overallDeadline = 0.0
@@ -338,7 +376,16 @@ final class SyntheticDockConsumerSmoke: NSObject {
         return sysctlbyname("kern.osversion", &bytes, &length, nil, 0) == 0 ? String(cString: bytes) : "unavailable"
     }
 
-    func run() throws {
+    func applicationDidFinishLaunching() {
+        report.applicationDidFinishLaunchingAt = ProcessInfo.processInfo.systemUptime
+    }
+
+    func recordAdmissionFailure(_ reason: String) {
+        report.status = "blocked"
+        report.failures.append(reason)
+    }
+
+    func run() async throws {
         overallDeadline = ProcessInfo.processInfo.systemUptime + 60
         do {
             guard Thread.isMainThread else { throw DockSmokeFixture.Failure("AppKit smoke must run on the main thread") }
@@ -349,55 +396,61 @@ final class SyntheticDockConsumerSmoke: NSObject {
             guard CGPreflightListenEventAccess(), CGPreflightPostEventAccess() else {
                 throw DockSmokeFixture.Failure("existing input/post access is absent; no permissions were requested")
             }
-            _ = NSApplication.shared
+            guard NSApp?.isRunning == true, report.applicationDidFinishLaunchingAt != nil else {
+                throw DockSmokeFixture.Failure("real NSApplication.run lifecycle has not launched")
+            }
             guard NSScreen.screens.count == 1, NSApp.windows.isEmpty else {
                 throw DockSmokeFixture.Failure("dedicated single-display session with no existing test-app windows is required")
             }
             report.displayIDs = NSScreen.screens.compactMap { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value }
-            NSApp.setActivationPolicy(.regular)
-            NSApp.finishLaunching()
             NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(spaceChanged),
                 name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
-            NotificationCenter.default.addObserver(self, selector: #selector(enteredFullscreen),
-                name: NSWindow.didEnterFullScreenNotification, object: nil)
             anchor = makeWindow("Dock smoke: desktop anchor", color: .systemBlue)
             anchor?.collectionBehavior = [.managed, .fullScreenNone]
             anchor?.makeKeyAndOrderFront(nil)
             fullscreen = makeWindow("Dock smoke: owned fullscreen Space", color: .systemGreen)
             fullscreen?.collectionBehavior = [.managed, .fullScreenPrimary]
+            fullscreen?.delegate = self
             report.ownedWindowNumbers = [anchor, fullscreen].compactMap { $0?.windowNumber }
             fullscreen?.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
-            try wait(timeout: 5) { NSApp.isActive && self.fullscreen?.isKeyWindow == true }
+            try await wait(timeout: 5) { NSApp.isActive && self.fullscreen?.isKeyWindow == true }
+            transitionFullscreen(.entering)
             fullscreen?.toggleFullScreen(nil)
-            try wait(timeout: 12, stable: 1) {
-                self.fullScreenEntered && self.notificationCount > 0 && self.atFullscreen &&
+            try await wait(timeout: 12, stable: 1) {
+                self.fullscreenPhase == .fullscreen && self.notificationCount > 0 && self.atFullscreen &&
                     ProcessInfo.processInfo.systemUptime - self.lastSpaceChange >= 1
             }
             report.fullscreenSettled = state()
             try chain.install()
-            try round("forward-left-positive", direction: .left, mode: .forward, startsFullscreen: true)
-            try round("forward-right-restore", direction: .right, mode: .forward, startsFullscreen: false)
-            try round("consume-left-no-movement", direction: .left, mode: .consume, startsFullscreen: true)
-            try round("forward-left-after-consumption", direction: .left, mode: .forward, startsFullscreen: true)
-            cleanup()
-            guard report.invalidatedTaps == 3, report.ownedWindowsClosed, report.failures.isEmpty else {
-                throw DockSmokeFixture.Failure("owned fixture cleanup was incomplete")
+            try await round("forward-left-positive", direction: .left, mode: .forward, startsFullscreen: true)
+            try await round("forward-right-restore", direction: .right, mode: .forward, startsFullscreen: false)
+            try await round("consume-left-no-movement", direction: .left, mode: .consume, startsFullscreen: true)
+            try await round("forward-left-after-consumption", direction: .left, mode: .forward, startsFullscreen: true)
+            await cleanup()
+            guard report.rounds.count == 4,
+                  report.rounds.allSatisfy({ $0.passed && $0.postedPhaseCount == 3 }),
+                  report.rounds.map(\.mode) == [.forward, .forward, .consume, .forward],
+                  report.receipts.filter(\.consumed).count == 3,
+                  report.invalidatedTaps == 3, report.ownedWindowsClosed, report.failures.isEmpty else {
+                throw DockSmokeFixture.Failure("synthetic smoke invariants or owned fixture cleanup were incomplete")
             }
             report.status = "passed"
         } catch {
             report.failures.append(String(describing: error))
             report.status = "failed"
-            cleanup()
+            await cleanup()
             throw error
         }
     }
+    private var fullscreenFixtureIntact: Bool {
+        fullscreenPhase == .fullscreen && fullscreen?.styleMask.contains(.fullScreen) == true
+    }
     private var atFullscreen: Bool {
-        fullscreen?.isOnActiveSpace == true && anchor?.isOnActiveSpace == false &&
-            fullscreen?.styleMask.contains(.fullScreen) == true
+        fullscreenFixtureIntact && fullscreen?.isOnActiveSpace == true && anchor?.isOnActiveSpace == false
     }
     private var atDesktop: Bool {
-        fullscreen?.isOnActiveSpace == false && anchor?.isOnActiveSpace == true
+        fullscreenFixtureIntact && fullscreen?.isOnActiveSpace == false && anchor?.isOnActiveSpace == true
     }
     private func makeWindow(_ title: String, color: NSColor) -> NSWindow {
         let window = NSWindow(contentRect: NSRect(x: 80, y: 80, width: 620, height: 420),
@@ -414,10 +467,28 @@ final class SyntheticDockConsumerSmoke: NSObject {
         if report.spaceChanges.count < 32 { report.spaceChanges.append(state()) }
         else { report.failures.append("space notification evidence overflowed") }
     }
-    @objc private func enteredFullscreen(_ notification: Notification) {
-        guard let window = notification.object as? NSWindow, window === fullscreen else { return }
-        fullScreenEntered = true
+    func windowWillEnterFullScreen(_ notification: Notification) { transitionFullscreen(.entering) }
+    func windowDidEnterFullScreen(_ notification: Notification) {
         report.fullscreenEnteredAt = ProcessInfo.processInfo.systemUptime
+        transitionFullscreen(.fullscreen)
+    }
+    func windowWillExitFullScreen(_ notification: Notification) { transitionFullscreen(.exiting) }
+    func windowDidExitFullScreen(_ notification: Notification) { transitionFullscreen(.windowed) }
+    func windowDidFailToEnterFullScreen(_ window: NSWindow) {
+        report.failures.append("AppKit reported failure to enter fullscreen")
+        transitionFullscreen(.windowed)
+    }
+    func windowDidFailToExitFullScreen(_ window: NSWindow) {
+        report.failures.append("AppKit reported failure to exit fullscreen")
+        transitionFullscreen(.failed)
+    }
+    private func transitionFullscreen(_ phase: DockSmokeFullscreenPhase) {
+        if phase.invalidatesFixture(duringExperiment: currentStage != "setup" && currentStage != "cleanup") {
+            report.failures.append("owned fullscreen fixture unexpectedly changed to \(phase.rawValue) during \(currentStage); Space notifications cannot count as swipe evidence")
+        }
+        fullscreenPhase = phase
+        if report.fullscreenLifecycle.count < 16 { report.fullscreenLifecycle.append(state()) }
+        else { report.failures.append("fullscreen lifecycle evidence overflowed") }
     }
     private func state() -> WindowState {
         WindowState(stage: currentStage, uptime: ProcessInfo.processInfo.systemUptime,
@@ -425,7 +496,8 @@ final class SyntheticDockConsumerSmoke: NSObject {
             anchorWindowOnActiveSpace: anchor?.isOnActiveSpace ?? false,
             fullscreenWindowVisible: fullscreen?.isVisible ?? false,
             anchorWindowVisible: anchor?.isVisible ?? false,
-            spaceNotifications: notificationCount)
+            spaceNotifications: notificationCount, fullscreenPhase: fullscreenPhase,
+            applicationIsRunning: NSApp?.isRunning ?? false)
     }
     private func newTag() -> Int64 {
         var tag: Int64
@@ -434,7 +506,7 @@ final class SyntheticDockConsumerSmoke: NSObject {
         return tag
     }
     private func round(_ name: String, direction: DockSmokeFixture.Direction, mode: DockSmokeFixture.Mode,
-                       startsFullscreen: Bool) throws {
+                       startsFullscreen: Bool) async throws {
         guard report.failures.isEmpty, chain.failures.isEmpty, startsFullscreen ? atFullscreen : atDesktop else {
             throw DockSmokeFixture.Failure("round precondition/source state failed; no further gesture was posted")
         }
@@ -456,14 +528,14 @@ final class SyntheticDockConsumerSmoke: NSObject {
         if mode == .consume {
             let until = min(overallDeadline, ProcessInfo.processInfo.systemUptime + 2)
             while ProcessInfo.processInfo.systemUptime < until {
-                pump()
+                try await Task.sleep(nanoseconds: 20_000_000)
                 guard atFullscreen, notificationCount == before.spaceNotifications,
                       chain.failures.isEmpty, report.failures.isEmpty else {
                     throw DockSmokeFixture.Failure("consumed synthetic sequence moved Space or lost tap/source integrity; runner must be discarded")
                 }
             }
         } else {
-            try wait(timeout: 8, stable: 1) {
+            try await wait(timeout: 8, stable: 1) {
                 self.notificationCount > before.spaceNotifications && (startsFullscreen ? self.atDesktop : self.atFullscreen) &&
                     ProcessInfo.processInfo.systemUptime - self.lastSpaceChange >= 1
             }
@@ -474,11 +546,11 @@ final class SyntheticDockConsumerSmoke: NSObject {
         report.rounds[index].after = state()
         report.rounds[index].passed = true
     }
-    private func wait(timeout: Double, stable: Double = 0, condition: () -> Bool) throws {
+    private func wait(timeout: Double, stable: Double = 0, condition: () -> Bool) async throws {
         let end = min(overallDeadline, ProcessInfo.processInfo.systemUptime + timeout)
         var matchingSince: Double?
         while ProcessInfo.processInfo.systemUptime < end {
-            pump()
+            try await Task.sleep(nanoseconds: 20_000_000)
             guard chain.failures.isEmpty, report.failures.isEmpty else {
                 throw DockSmokeFixture.Failure("callback/notification failure; next sequence forbidden")
             }
@@ -490,16 +562,7 @@ final class SyntheticDockConsumerSmoke: NSObject {
         }
         throw DockSmokeFixture.Failure("window/Space positive control did not become stably true before deadline")
     }
-    private func pump() {
-        CFRunLoopRunInMode(.defaultMode, 0.01, false)
-        // XCTest does not run NSApplication.run(). Deliver only the AppKit queue
-        // needed by our own window lifecycle; never synthesize keyboard shortcuts.
-        while let event = NSApp.nextEvent(matching: .any, until: Date(), inMode: .default, dequeue: true) {
-            NSApp.sendEvent(event)
-        }
-        NSApp.updateWindows()
-    }
-    private func cleanup() {
+    private func cleanup() async {
         guard !didCleanup else { return }
         didCleanup = true
         currentStage = "cleanup"
@@ -509,16 +572,34 @@ final class SyntheticDockConsumerSmoke: NSObject {
         report.calibratedFlags = chain.calibratedFlags
         report.invalidatedTaps = chain.invalidatedTaps
         report.failures.append(contentsOf: chain.failures)
-        NotificationCenter.default.removeObserver(self)
-        NSWorkspace.shared.notificationCenter.removeObserver(self)
-        fullscreen?.close()
+        // Closing a window during AppKit's Entering/Exiting transition raised an
+        // InvalidTransition exception in the original synchronous XCTest fixture.
+        // Yield to the REAL application loop, never manually pump or force close.
+        let settleDeadline = ProcessInfo.processInfo.systemUptime + 5
+        while fullscreenPhase.transitioning && ProcessInfo.processInfo.systemUptime < settleDeadline {
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        if fullscreenPhase == .fullscreen {
+            transitionFullscreen(.exiting)
+            fullscreen?.toggleFullScreen(nil)
+            let exitDeadline = ProcessInfo.processInfo.systemUptime + 5
+            while !fullscreenPhase.canCloseWithoutTransition && ProcessInfo.processInfo.systemUptime < exitDeadline {
+                try? await Task.sleep(nanoseconds: 20_000_000)
+            }
+        }
+        if fullscreenPhase.canCloseWithoutTransition {
+            fullscreen?.close()
+        } else {
+            report.cleanupDeferredForUnsettledFullscreen = true
+            report.failures.append("owned fullscreen transition did not settle; do not close mid-transition; process exit discards this runner session")
+        }
         anchor?.close()
         report.ownedWindowsClosed = (fullscreen?.isVisible != true && anchor?.isVisible != true)
         report.cleanupAfter = state()
-        fullscreen = nil
-        anchor = nil
-        // No Dock restart, guessed cancellation packet, security change, window
-        // movement to an arbitrary Space, or private Space-management API.
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
+        // Keep a transitioning window retained until process exit. No Dock reset,
+        // guessed gesture repair, or reentrant AppKit close is attempted.
+        if report.ownedWindowsClosed { fullscreen = nil; anchor = nil }
     }
     func writeReport(to path: String) throws {
         let encoder = JSONEncoder()
