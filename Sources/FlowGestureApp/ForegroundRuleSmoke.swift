@@ -27,6 +27,11 @@ final class ForegroundRuleSmoke {
     private var overallDeadline: TimeInterval = 0
     private var stage = "setup"
     private var stageStartedAt: TimeInterval = 0
+    private var stageWait: ForegroundSmokeStageWait<ActionEvent>?
+    private var stageTimer: Timer?
+    // Both callers run on the main CFRunLoop, including inside event tracking.
+    // Sample in place: dispatching this evidence would timestamp queue latency.
+    private var observeStage: ((String) -> Void)?
     private var finished = false
     private var pointerDiagnostics = "no mouse event posted"
     init(model: AppModel) { self.model = model }
@@ -35,6 +40,12 @@ final class ForegroundRuleSmoke {
         startedAt = ProcessInfo.processInfo.systemUptime
         stageStartedAt = startedAt
         overallDeadline = startedAt + Self.totalTimeout
+        // A stalled main queue/run loop must not extend the overall time bound.
+        // Normal failures still capture the fixture window on the main thread.
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + max(0, overallDeadline - ProcessInfo.processInfo.systemUptime)) {
+            fputs("FAIL: foreground rule smoke exceeded its 15s global deadline (independent watchdog)\n", stderr)
+            _exit(1)
+        }
         let output = Action.shortcut(KeyboardShortcut(keyCode: Self.sideOutputKey, modifiers: [.command, .option]))
         // Distinct fixture outputs prevent a late duplicate from the side-button
         // rule being mistaken for the keyboard rule's expected down/up pair.
@@ -61,7 +72,9 @@ final class ForegroundRuleSmoke {
                           event.getIntegerValueField(.eventSourceUserData) == EventEngine.syntheticTag {
                     let observed = ActionEvent(type: type, keyCode: event.getIntegerValueField(.keyboardEventKeycode))
                     smoke.observedActions.append(observed)
-                    print("INFO: foreground audit +\(ForegroundRuleSmoke.seconds(ProcessInfo.processInfo.systemUptime - smoke.startedAt))s: \(observed); actionEvents=\(smoke.actionEvents), stage=\(smoke.stage)")
+                    let now = ProcessInfo.processInfo.systemUptime
+                    smoke.observeStage?("action audit")
+                    print("INFO: foreground audit +\(ForegroundRuleSmoke.seconds(now - smoke.startedAt))s: \(observed); actionEvents=\(smoke.actionEvents), stage=\(smoke.stage)")
                 }
             }
             return Unmanaged.passUnretained(event)
@@ -172,35 +185,53 @@ final class ForegroundRuleSmoke {
     @MainActor private func waitForStage(_ name: String, expected: [ActionEvent], failure: String,
                                         condition: @escaping () -> Bool, completion: @escaping () -> Void) {
         guard !finished else { return }
+        stageTimer?.invalidate()
         stage = name
         stageStartedAt = ProcessInfo.processInfo.systemUptime
         let deadline = min(stageStartedAt + Self.stageTimeout, overallDeadline)
+        stageWait = ForegroundSmokeStageWait(expected: expected, deadline: deadline,
+                                            overallDeadline: overallDeadline, settleInterval: Self.settleInterval)
+        observeStage = { [weak self] source in
+            guard let self else { return }
+            let previousMatch = self.stageWait?.matchingSince
+            let matches = condition()
+            // Timestamp after reading the predicate; never infer earlier state
+            // from an old event timestamp or the timer's scheduled fire date.
+            let now = ProcessInfo.processInfo.systemUptime
+            self.stageWait?.observe(events: self.observedActions, condition: matches, at: now)
+            if let match = self.stageWait?.matchingSince, match != previousMatch {
+                print("INFO: foreground stage=\(self.stage) first matched at +\(Self.seconds(match - self.startedAt))s via \(source)")
+            }
+        }
         print("INFO: foreground stage=\(name), deadline=+\(Self.seconds(deadline - startedAt))s, budget=\(Self.seconds(deadline - stageStartedAt))s, settle=\(Self.seconds(Self.settleInterval))s, expected=\(expected)")
-        pollStage(expected: expected, deadline: deadline, matchingSince: nil, failure: failure, condition: condition, completion: completion)
+        let poll: () -> Void = { [weak self] in self?.pollStage(failure: failure, completion: completion) }
+        let timer = Timer(timeInterval: 0.02, repeats: true) { _ in poll() }
+        stageTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+        poll()
     }
 
-    @MainActor private func pollStage(expected: [ActionEvent], deadline: TimeInterval, matchingSince: TimeInterval?,
-                                     failure: String, condition: @escaping () -> Bool, completion: @escaping () -> Void) {
+    @MainActor private func pollStage(failure: String, completion: @escaping () -> Void) {
         guard !finished else { return }
         guard auditDisabledReason == nil, auditIsEnabled else { fail("action audit tap disabled during \(stage)"); return }
+        observeStage?("run-loop poll")
         let now = ProcessInfo.processInfo.systemUptime
-        // Incomplete pairs may arrive over several run-loop turns. Extra events,
-        // wrong keys and out-of-order down/up events are failures, never progress.
-        guard observedActions.count <= expected.count, Array(expected.prefix(observedActions.count)) == observedActions else {
-            fail("\(failure) (unexpected synthetic key sequence; expected \(expected))"); return
-        }
-        guard now < deadline else { fail("\(failure) (stage deadline exceeded)"); return }
-        let isMatching = observedActions == expected && condition()
-        let stableSince = isMatching ? (matchingSince ?? now) : nil
-        // Keep the exact assertion true across a quiet interval before starting
-        // the next input. The run loop remains free to deliver late duplicates.
-        if let stableSince, now - stableSince >= Self.settleInterval {
-            print("INFO: foreground stage=\(stage) passed after \(Self.seconds(now - stageStartedAt))s; actionEvents=\(actionEvents), sequence=\(observedActions)")
+        guard let wait = stageWait else { fail("missing stage observation"); return }
+        switch wait.result(at: now) {
+        case .waiting: return
+        case .invalidSequence:
+            fail("\(failure) (unexpected synthetic key sequence; expected \(wait.expected))")
+        case .stageDeadline:
+            fail("\(failure) (stage deadline exceeded without timely settled evidence)")
+        case .overallDeadline:
+            fail("foreground rule test global deadline exceeded (\(Self.totalTimeout)s)")
+        case .passed:
+            print("INFO: foreground stage=\(stage) passed after \(Self.seconds(now - stageStartedAt))s; observedMatch=+\(Self.seconds((wait.matchingSince ?? now) - startedAt))s, actionEvents=\(actionEvents), sequence=\(observedActions)")
+            stageTimer?.invalidate()
+            stageTimer = nil
+            observeStage = nil
+            stageWait = nil
             completion()
-            return
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
-            self.pollStage(expected: expected, deadline: deadline, matchingSince: stableSince, failure: failure, condition: condition, completion: completion)
         }
     }
 
@@ -242,8 +273,10 @@ final class ForegroundRuleSmoke {
     @MainActor private func fail(_ reason: String) {
         guard !finished else { return }
         finished = true
+        stageTimer?.invalidate()
         let now = ProcessInfo.processInfo.systemUptime
-        fputs("FAIL: \(reason); stage=\(stage), stageElapsed=\(Self.seconds(now - stageStartedAt))s, totalElapsed=\(Self.seconds(now - startedAt))s, enabled=\(model.isEnabled), engineRunning=\(model.engineRunning), actionEvents=\(actionEvents), sequence=\(observedActions), auditEnabled=\(auditIsEnabled), auditDisabledReason=\(auditDisabledReason ?? "none"), lastEvent=\(model.lastEvent), active=\(NSApp.isActive), keySettings=\(settingsWindow?.isKeyWindow == true); \(pointerDiagnostics)\n", stderr)
+        let observedMatch = stageWait?.matchingSince.map { "+\(Self.seconds($0 - startedAt))s" } ?? "none"
+        fputs("FAIL: \(reason); stage=\(stage), stageElapsed=\(Self.seconds(now - stageStartedAt))s, totalElapsed=\(Self.seconds(now - startedAt))s, observedMatch=\(observedMatch), enabled=\(model.isEnabled), engineRunning=\(model.engineRunning), actionEvents=\(actionEvents), sequence=\(observedActions), auditEnabled=\(auditIsEnabled), auditDisabledReason=\(auditDisabledReason ?? "none"), lastEvent=\(model.lastEvent), active=\(NSApp.isActive), keySettings=\(settingsWindow?.isKeyWindow == true); \(pointerDiagnostics)\n", stderr)
         captureFailureWindow()
         exit(1)
     }
@@ -263,5 +296,52 @@ final class ForegroundRuleSmoke {
         } catch {
             fputs("INFO: foreground failure window capture write failed: \(error)\n", stderr)
         }
+    }
+}
+
+/// Timestamped observations, independent of when a polling callback is scheduled.
+/// This helper is only used by the opt-in smoke test and its deterministic tests.
+struct ForegroundSmokeStageWait<Event: Equatable> {
+    enum Result: Equatable { case waiting, passed, invalidSequence, stageDeadline, overallDeadline }
+
+    let expected: [Event]
+    let deadline: TimeInterval
+    let overallDeadline: TimeInterval
+    let settleInterval: TimeInterval
+    private(set) var matchingSince: TimeInterval?
+    private var invalidSequence = false
+
+    init(expected: [Event], deadline: TimeInterval, overallDeadline: TimeInterval, settleInterval: TimeInterval) {
+        self.expected = expected
+        self.deadline = deadline
+        self.overallDeadline = overallDeadline
+        self.settleInterval = settleInterval
+    }
+
+    mutating func observe(events: [Event], condition: Bool, at now: TimeInterval) {
+        // Incomplete pairs can arrive over several run-loop turns, but duplicates,
+        // wrong keys and out-of-order down/up events permanently invalidate a stage.
+        guard !invalidSequence, events.count <= expected.count, expected.starts(with: events) else {
+            invalidSequence = true
+            matchingSince = nil
+            return
+        }
+        if events == expected && condition {
+            if matchingSince == nil { matchingSince = now }
+        } else {
+            matchingSince = nil
+        }
+    }
+
+    func result(at now: TimeInterval) -> Result {
+        // Evidence cannot extend the global limit, and extra events cannot be
+        // excused because the expected pair happened to arrive earlier.
+        guard now < overallDeadline else { return .overallDeadline }
+        guard !invalidSequence else { return .invalidSequence }
+        if let matchingSince, matchingSince + settleInterval <= deadline,
+           now >= matchingSince + settleInterval { return .passed }
+        // A late poll may accept a timely, settled observation above. A condition
+        // first seen true by that late poll is never backdated to an earlier event.
+        return now < deadline ? .waiting : .stageDeadline
     }
 }
