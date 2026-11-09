@@ -82,7 +82,11 @@ The Linux workspace has no Swift toolchain. The foundation and Quartz decoder
 tests compiled and passed in the 185-test macOS 15.8.2/Swift 6.1.2 suite at
 commit `3cee9b4942481b9c0fdde1d216d49490c938f5b2`
 ([successful full CI](https://github.com/AaronJny/flowgesture/actions/runs/42489465736)).
-All subsequent UI and package checks passed too. The test fixtures and CI success
-are not hardware interception evidence.
+All subsequent UI and package checks passed too. The later provenance hardening,
+coordinator and decoder-to-admission replays passed in the **247-test** suite at
+`f3ba61d3dac1c2da2ad321a0a46bead1afb69bb7`, with all UI/package steps successful
+on macOS 15 ARM64, macOS 15 Intel and macOS 26 ARM64
+([run 42557789747](https://github.com/AaronJny/flowgesture/actions/runs/42557789747)).
+The test fixtures and CI success are not hardware interception evidence.
 
 Physical-machine blockers: complete private stream ordering; real sender retention and MT registry correlation; first opening arriving before raw action; overlay checks; class-29 companion necessity; terminal consumption without synthetic posting; three/four-finger mappings; simultaneous devices; Space edges/fullscreen/multiple displays; native animation absence; and permission/sleep/disconnect/timeout recovery. No exact-build capability is validated yet. Both actions firing, stuck animation, or unrelated-input loss fails acceptance. Vertical gestures, pinch, scroll, and taps remain outside scope.

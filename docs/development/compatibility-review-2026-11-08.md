@@ -15,7 +15,7 @@ This is a source review and an isolated test-branch implementation, not a new re
 | Actions | Shortcut, script, URL/app/file, menu, window and media/system actions | AX/Automation permissions, missing menus, sandbox/secure-input behavior and application-specific window support need a real macOS session. |
 | Device lifecycle | Device enumeration, separate identities, wake refresh, topology polling, bounded callback queue, isolated failed-device retries | Capture restart with fingers down, Bluetooth reconnect and simultaneous devices require physical testing. |
 | Configuration | Validation, import/export, backups, folder sync, bilingual settings | Corrupt/imported configs are guarded; simultaneous sync edits and actual UI interactions still need macOS acceptance. |
-| Distribution | macOS 13+, arm64/x86_64 packaging and macOS CI | Full test-branch CI and universal build passed on macOS 15.8.2; wider OS/hardware certification remains separate. |
+| Distribution | macOS 13+, arm64/x86_64 packaging and macOS CI | See the dated CI results below for tested OS/architecture combinations; hardware certification remains separate. |
 
 ## Changes in this patch
 
@@ -97,10 +97,10 @@ No synthetic reactivation or skipped assertion masks a failed Save.
 
 1. **Retain the full macOS CI gate.** The isolated branch
    `dot/touch-compatibility-20261108` was pushed with explicit approval. The old
-   macOS 14 runner was retired, so CI now uses `macos-15`. Actual native control
+   macOS 14 runner was retired, so the initial repaired CI used `macos-15`. Actual native control
    geometry replaced brittle fixed-coordinate clicks; that revealed and led to
-   fixing the small-screen Save defect above. The complete suite now passes.
-   The environment catalog still has no interactive Mac or saved Mac configuration.
+   fixing the small-screen Save defect above. That complete macOS 15 suite passed on November 8; the November 9 section below records expanded matrix results.
+   No interactive personal Mac is used for this work.
 2. **Verify production fixes physically.** Exercise app/config changes during
    callback backlog, short/fast gestures, mixed devices, and real start failures.
 3. **Complete native-gesture arbitration.** Follow the existing
@@ -145,3 +145,67 @@ trackpads and Magic Mouse, verify two-device isolation, and check the advice in
 English and Chinese at the minimum editor size. Touch-editor screenshots are now
 part of CI's review artifacts. Only the isolated test branch is being updated;
 no main-branch merge, release or system setting was changed.
+
+## Follow-up: verification without a personal computer (2026-11-09)
+
+Cloud verification now covers macOS 15 ARM64, macOS 15 Intel and macOS 26 ARM64.
+The new inactive coordinator reserves an explicitly correlated raw session before
+returning native consumption, revokes stale queued actions, and admits at most one
+action per supplied session. Separate context cancellation preserves already-owned
+native streams while cancelling their actions. Independent review added regression
+coverage for unidentified senders, duplicate registry associations, unverified
+terminal packets and delayed native openings belonging to an earlier raw session.
+
+The replay suite includes 33 coordinator test methods, 330 fixed single-session
+channel interleavings, six CoreGraphics decoder-to-admission scenarios and 33
+upstream WebKit browser-back packets as negative cases. All positive source/build/
+correlation attestations are deliberately simulated; production still constructs
+no coordinator and enables no native interception profile. PID zero is no longer
+accepted as physical-source proof.
+
+The expanded Intel CI exposed a SwiftUI Canvas/Metal crash in the free-form shape
+editor. Its simple preview now uses AppKit/CoreGraphics; recording input remains
+with the existing DragGesture. Nine CPU bitmap/view tests cover orientation,
+colors, stroke/marker geometry, empty/one-point paths, resize and redraw requests.
+The shape screenshot and existing mouse-button capture/save smoke remain enabled.
+Those checks do not simulate drawing a physical shape with a real mouse.
+
+### Final cloud verification
+
+Code revision `f3ba61d3dac1c2da2ad321a0a46bead1afb69bb7` passed
+[CI run 42557789747](https://github.com/AaronJny/flowgesture/actions/runs/42557789747)
+on all three matrix jobs:
+
+| Runner | Actual macOS / build | Swift | Result |
+|---|---|---|---|
+| `macos-15` (ARM64) | 15.8.2 / 24H232 | 6.1.2 | All steps passed |
+| `macos-15-intel` | 15.7.9 / 24G830 | 6.1.2 | All steps passed |
+| `macos-26` (ARM64) | 26.7.2 / 25G332 | 6.3.3 | All steps passed |
+
+Each job passed **247 Swift tests with zero failures**, native bridge tests,
+universal app build, launch, all seven UI fixture renders, foreground mappings,
+text editing and pause, full-screen action, native shortcut capture, actual
+shortcut Record/Save persistence, click/draw/shape mouse Record/Cancel/Record/Save,
+and both original and downloaded install-image verification and launch. The CPU
+shape previews were visually inspected on all three runners at `7896801`; no
+renderer/UI code changed afterward. Final smoke checks also passed on all three.
+
+The expanded Intel run exposed a second, test-only timing defect: the complete
+side-button action arrived before its deadline, but a delayed poll rejected it.
+The smoke now timestamps full predicate observations in the audit callback and a
+common-modes timer. The complete 250 ms quiet interval must fit inside the 2 s
+stage budget; late first observations and extra/wrong events still fail. Twelve
+regressions cover these timing and sequence rules, and an independent 15 s
+watchdog bounds the whole probe. In the final Intel run the pair arrived at
++0.320/+0.321 s; the delayed poll accepted that timely evidence, and the exact
+four-event sequence, editing and pause assertions all passed.
+
+The Linux native bridge and fake-runtime checks also passed again, including
+ASan/UBSan with leak detection disabled for the executor's ptrace limitation.
+Only documentation changed after the verified code revision above.
+
+See [the no-connection verification report](no-connection-verification.md) for
+public source evidence, the scoped trace-search result and an optional self-run
+baseline. No connection, new permissions, security changes or automatic trace
+upload are required. Native Spaces/Mission Control suppression remains unverified
+and inactive; cloud tests must not be described as physical-device certification.

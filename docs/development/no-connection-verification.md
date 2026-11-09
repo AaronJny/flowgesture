@@ -39,9 +39,30 @@ were therefore skipped. [runner-images issue 15251](https://github.com/actions/r
 independently reproduces the same assertion with a minimal SwiftUI Canvas on
 that hosted runner. This strongly implicates the graphics path, but does not by
 itself prove the exact cause of FlowGesture's crash. No assertion is skipped and
-no global graphics/security setting is disabled. The shape preview's simple
-stroke can use an AppKit/CoreGraphics drawing view instead of Canvas; final
-implementation and test results must be recorded separately from this baseline.
+no global graphics/security setting is disabled. The shape preview now uses an
+AppKit/CoreGraphics drawing view instead of Canvas, preserving the existing
+recording DragGesture and avoiding a Metal-dependent drawing surface. Nine CPU
+bitmap/view tests check orientation, colors, stroke/marker geometry, empty and
+one-point paths, resize and redraw requests. The seven CI screenshots include
+the shape preview. These are renderer checks, not a physical shape-drawing test.
+
+## Final cloud result
+
+[Run 42557789747](https://github.com/AaronJny/flowgesture/actions/runs/42557789747)
+passed all steps at code revision `f3ba61d3dac1c2da2ad321a0a46bead1afb69bb7`:
+macOS 15.8.2 / 24H232 ARM64, 15.7.9 / 24G830 Intel and 26.7.2 / 25G332 ARM64.
+Each job passed 247 Swift tests, native tests, the universal build, every UI smoke
+(including shape mouse Record/Cancel/Record/Save), seven screenshots and both
+original and downloaded DMG install/launch verification. A separate test-only
+polling deadline defect discovered on Intel was repaired without dropping any
+assertion; 12 timing/sequence regressions and the complete foreground smoke passed.
+See [the compatibility review](compatibility-review-2026-11-08.md#final-cloud-verification)
+for the precise checks and timing evidence. Later changes are documentation only.
+
+These results do not provide a physical event stream, prove native suppression,
+or authorize activation. Production still constructs no coordinator and enables
+no native interception profile. The optional baseline below is not needed to
+reproduce these cloud results and is not a request to connect the user's Mac.
 
 ## Optional self-run baseline, no remote access or source build
 
