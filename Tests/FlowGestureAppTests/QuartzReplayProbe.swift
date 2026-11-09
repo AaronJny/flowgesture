@@ -11,6 +11,10 @@ final class QuartzReplayProbe {
     typealias Coordinator = NativeRawGestureCoordinator
     enum Stage: String, Codable { case head, admission, tail }
 
+    struct FixtureFields: Codable, Equatable {
+        let flagsRawValue: UInt64
+        let publicMotionFields: [String: Double]
+    }
     struct Observation: Codable {
         let ordinal: Int
         let stage: Stage
@@ -19,15 +23,17 @@ final class QuartzReplayProbe {
         let sourceTag: Int64
         let sourcePID: Int64
         let uptime: Double
+        let fields: FixtureFields
     }
     struct Delivery: Codable {
         let name: String
         let sourceTag: Int64
         let expectedStages: [Stage]
         var observations: [Observation] = []
+        var postedFields: FixtureFields?
     }
     struct Report: Codable {
-        let schemaVersion = 1
+        let schemaVersion = 2
         let evidenceScope = "synthetic-public-scroll-transport-only"
         let privateGesturePacketsPosted = false
         let provesPhysicalGestureSuppression = false
@@ -185,6 +191,10 @@ final class QuartzReplayProbe {
     func writeReport(to path: String) throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        // Preserve a rejected non-finite value as diagnostic evidence instead of
+        // losing the whole failure report when JSONEncoder encounters it.
+        encoder.nonConformingFloatEncodingStrategy = .convertToString(
+            positiveInfinity: "Infinity", negativeInfinity: "-Infinity", nan: "NaN")
         let url = URL(fileURLWithPath: path)
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try encoder.encode(report).write(to: url, options: .atomic)
@@ -254,9 +264,10 @@ final class QuartzReplayProbe {
         report.deliveries[index].observations.append(Observation(
             ordinal: ordinal, stage: stage, callbackType: type.rawValue, eventType: event.type.rawValue,
             sourceTag: tag, sourcePID: event.getIntegerValueField(.eventSourceUnixProcessID),
-            uptime: ProcessInfo.processInfo.systemUptime))
+            uptime: ProcessInfo.processInfo.systemUptime, fields: Self.fixtureFields(event)))
         guard Self.isHarmlessFixture(type: type, event: event) else {
-            report.failures.append("tagged fixture changed callback type or public motion fields")
+            let reasons = Self.fixtureRejections(type: type, event: event).joined(separator: ", ")
+            report.failures.append("\(stage.rawValue) tagged fixture changed: \(reasons)")
             return Unmanaged.passUnretained(event)
         }
         // Use the ACTUAL callback class, not an expected private selector. Public
@@ -278,15 +289,43 @@ final class QuartzReplayProbe {
         return Unmanaged.passUnretained(event)
     }
 
+    private static let motionFields: [(name: String, field: CGEventField)] = [
+        ("deltaAxis1", .scrollWheelEventDeltaAxis1),
+        ("deltaAxis2", .scrollWheelEventDeltaAxis2),
+        ("deltaAxis3", .scrollWheelEventDeltaAxis3),
+        ("fixedPtDeltaAxis1", .scrollWheelEventFixedPtDeltaAxis1),
+        ("fixedPtDeltaAxis2", .scrollWheelEventFixedPtDeltaAxis2),
+        ("fixedPtDeltaAxis3", .scrollWheelEventFixedPtDeltaAxis3),
+        ("pointDeltaAxis1", .scrollWheelEventPointDeltaAxis1),
+        ("pointDeltaAxis2", .scrollWheelEventPointDeltaAxis2),
+        ("pointDeltaAxis3", .scrollWheelEventPointDeltaAxis3),
+        ("scrollPhase", .scrollWheelEventScrollPhase),
+        ("momentumPhase", .scrollWheelEventMomentumPhase)
+    ]
+
+    static func fixtureFields(_ event: CGEvent) -> FixtureFields {
+        FixtureFields(flagsRawValue: event.flags.rawValue,
+                      publicMotionFields: Dictionary(uniqueKeysWithValues: motionFields.map {
+                          ($0.name, event.getDoubleValueField($0.field))
+                      }))
+    }
+
+    /// Diagnostics deliberately use exactly the same strict checks as admission.
+    /// No flag normalization or nonzero phase/delta is accepted by this revision.
+    static func fixtureRejections(type: CGEventType, event: CGEvent) -> [String] {
+        var reasons: [String] = []
+        if type != .scrollWheel { reasons.append("callbackType=\(type.rawValue)") }
+        if event.type != .scrollWheel { reasons.append("eventType=\(event.type.rawValue)") }
+        if !event.flags.isEmpty { reasons.append("flags=0x\(String(event.flags.rawValue, radix: 16))") }
+        for (name, field) in motionFields {
+            let value = event.getDoubleValueField(field)
+            if value != 0 { reasons.append("\(name)=\(value)") }
+        }
+        return reasons
+    }
+
     static func isHarmlessFixture(type: CGEventType, event: CGEvent) -> Bool {
-        guard type == .scrollWheel, event.type == .scrollWheel, event.flags.isEmpty else { return false }
-        let motionFields: [CGEventField] = [
-            .scrollWheelEventDeltaAxis1, .scrollWheelEventDeltaAxis2, .scrollWheelEventDeltaAxis3,
-            .scrollWheelEventFixedPtDeltaAxis1, .scrollWheelEventFixedPtDeltaAxis2, .scrollWheelEventFixedPtDeltaAxis3,
-            .scrollWheelEventPointDeltaAxis1, .scrollWheelEventPointDeltaAxis2, .scrollWheelEventPointDeltaAxis3,
-            .scrollWheelEventScrollPhase, .scrollWheelEventMomentumPhase
-        ]
-        return motionFields.allSatisfy { event.getDoubleValueField($0) == 0 }
+        fixtureRejections(type: type, event: event).isEmpty
     }
 
     private func send(_ name: String, admission: Admission? = nil, consumed: Bool = false, bypass: Bool = false) throws {
@@ -302,7 +341,8 @@ final class QuartzReplayProbe {
         try require(Self.isHarmlessFixture(type: .scrollWheel, event: event), "fixture was not harmless before posting")
         let index = report.deliveries.count
         let stages: [Stage] = bypass ? [.head, .tail] : consumed ? [.head, .admission] : [.head, .admission, .tail]
-        report.deliveries.append(Delivery(name: name, sourceTag: tag, expectedStages: stages))
+        report.deliveries.append(Delivery(name: name, sourceTag: tag, expectedStages: stages,
+                                          postedFields: Self.fixtureFields(event)))
         fixtures[tag] = index
         admissions[tag] = admission
         event.post(tap: .cgSessionEventTap)

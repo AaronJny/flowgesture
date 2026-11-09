@@ -57,13 +57,37 @@ final class QuartzReplayProbeTests: XCTestCase {
         XCTAssertEqual(interrupted.count, 0)
     }
 
+    private var emptyFixtureFields: QuartzReplayProbe.FixtureFields {
+        .init(flagsRawValue: 0, publicMotionFields: [:])
+    }
+
+    func testFieldDiagnosticsRetainExactFlagsAndCheckedMotionValues() throws {
+        let event = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2,
+                                        wheel1: 0, wheel2: 0, wheel3: 0))
+        event.flags = []
+        let before = QuartzReplayProbe.fixtureFields(event)
+        XCTAssertEqual(before.flagsRawValue, 0)
+        XCTAssertEqual(before.publicMotionFields.count, 11)
+        XCTAssertTrue(before.publicMotionFields.values.allSatisfy { $0 == 0 })
+        event.flags = .maskNonCoalesced
+        event.setDoubleValueField(.scrollWheelEventPointDeltaAxis2, value: 1)
+        let after = QuartzReplayProbe.fixtureFields(event)
+        XCTAssertEqual(after.flagsRawValue, CGEventFlags.maskNonCoalesced.rawValue)
+        XCTAssertEqual(after.publicMotionFields["pointDeltaAxis2"], 1)
+        XCTAssertEqual(QuartzReplayProbe.fixtureRejections(type: .scrollWheel, event: event),
+                       ["flags=0x\(String(CGEventFlags.maskNonCoalesced.rawValue, radix: 16))", "pointDeltaAxis2=1.0"])
+        XCTAssertFalse(QuartzReplayProbe.isHarmlessFixture(type: .scrollWheel, event: event))
+        // Capturing diagnostics must not mutate an event or its source tag.
+        XCTAssertEqual(QuartzReplayProbe.fixtureFields(event), after)
+    }
+
     private func delivery(_ stages: [QuartzReplayProbe.Stage], expected: [QuartzReplayProbe.Stage],
                           firstOrdinal: Int = 1, tag: Int64 = 7) -> QuartzReplayProbe.Delivery {
         QuartzReplayProbe.Delivery(name: "test", sourceTag: tag, expectedStages: expected,
                                    observations: stages.enumerated().map { offset, stage in
             QuartzReplayProbe.Observation(ordinal: firstOrdinal + offset, stage: stage,
                 callbackType: CGEventType.scrollWheel.rawValue, eventType: CGEventType.scrollWheel.rawValue,
-                sourceTag: tag, sourcePID: 123, uptime: 0)
+                sourceTag: tag, sourcePID: 123, uptime: 0, fields: emptyFixtureFields)
         })
     }
     func testEvidenceRequiresPositiveControlsAndExactOrdering() {
@@ -85,12 +109,12 @@ final class QuartzReplayProbeTests: XCTestCase {
         let stages: [QuartzReplayProbe.Stage] = [.head, .admission, .tail]
         var fixture = delivery(stages, expected: stages)
         fixture.observations[1] = QuartzReplayProbe.Observation(ordinal: 2, stage: .admission,
-            callbackType: 30, eventType: CGEventType.scrollWheel.rawValue, sourceTag: 7, sourcePID: 123, uptime: 0)
+            callbackType: 30, eventType: CGEventType.scrollWheel.rawValue, sourceTag: 7, sourcePID: 123, uptime: 0, fields: emptyFixtureFields)
         XCTAssertFalse(QuartzReplayProbe.validationErrors([fixture]).isEmpty)
         fixture = delivery(stages, expected: stages)
         fixture.observations[1] = QuartzReplayProbe.Observation(ordinal: 2, stage: .admission,
             callbackType: CGEventType.scrollWheel.rawValue, eventType: CGEventType.scrollWheel.rawValue,
-            sourceTag: 8, sourcePID: 123, uptime: 0)
+            sourceTag: 8, sourcePID: 123, uptime: 0, fields: emptyFixtureFields)
         XCTAssertFalse(QuartzReplayProbe.validationErrors([fixture]).isEmpty)
     }
 }
