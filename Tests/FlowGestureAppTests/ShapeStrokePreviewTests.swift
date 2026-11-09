@@ -10,14 +10,16 @@ final class ShapeStrokePreviewTests: XCTestCase {
     @MainActor func testBitmapSamplingUsesDrawingCoordinatesRatherThanScanlineOrder() async throws {
         // Calibrate the helper independently of StrokeView and its gesture-Y
         // conversion. These rectangles are asymmetric in both axes.
+        let red = NSColor(srgbRed: 1, green: 0, blue: 0, alpha: 1)
+        let blue = NSColor(srgbRed: 0, green: 0, blue: 1, alpha: 1)
         let image = try renderBitmap(width: 32, height: 24) { context in
-            context.setFillColor(CGColor(red: 1, green: 0, blue: 0, alpha: 1))
+            context.setFillColor(red.cgColor)
             context.fill(CGRect(x: 3, y: 4, width: 5, height: 7))
-            context.setFillColor(CGColor(red: 0, green: 0, blue: 1, alpha: 1))
+            context.setFillColor(blue.cgColor)
             context.fill(CGRect(x: 21, y: 16, width: 4, height: 3))
         }
-        try assertColor(image, x: 5, y: 6, equals: .red)
-        try assertColor(image, x: 23, y: 17, equals: .blue)
+        try assertColor(image, x: 5, y: 6, equals: red)
+        try assertColor(image, x: 23, y: 17, equals: blue)
         XCTAssertEqual(image.alpha(x: 5, y: 17), 0)
         XCTAssertEqual(image.alpha(x: 23, y: 6), 0)
     }
