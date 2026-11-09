@@ -39,8 +39,6 @@ hotplug/wake, input pass-through, and per-device identity.
 
 See the [acceptance matrix](../ACCEPTANCE.md) and
 [touch/device implementation notes](../touch-device-validation.md).
-The [daily-use compatibility review](compatibility-review-2026-11-08.md) records
-the current source-proven gaps, the touch interruption fix and its validation limits.
 
 ## Data and execution
 
@@ -65,7 +63,3 @@ then its copied app is signature/architecture-checked and launched.
 Artifact names include the runner label so parallel jobs cannot overwrite one
 another. Concurrency cancels superseded runs on the same ref. Historical run/artifact
 deletion is not automatic; useful diagnostic logs and the current build are retained.
-
-The test build keeps the existing application checks and does not require access
-to a personal computer. Standalone capture and synthetic Dock/Quartz experiments
-are not part of this minimal delivery.
