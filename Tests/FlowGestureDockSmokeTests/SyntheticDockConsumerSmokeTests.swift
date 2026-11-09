@@ -183,9 +183,23 @@ final class SyntheticDockConsumerSmokeTests: XCTestCase {
             XCTAssertFalse(replaced.matchesPayload(baseline), "strict payload guard: \(name)")
         }
 
+        // Quartz ignored a sourceTag setter on a copied event in hosted runs.
+        // Build a separate complete, UNPOSTED batch so this negative control
+        // compares actual reads of two factory-assigned tags, not setter intent.
+        let differentlyTaggedPacket = try XCTUnwrap(DockSmokeFixture.prepare(name: "unposted-other-tag",
+            direction: .right, mode: .consume, tags: [51, 52, 53]).packets.first)
+        let differentlyTaggedFields = Fields(differentlyTaggedPacket.event)
+        print("Separate unposted factory sourceTag field=\(CGEventField.eventSourceUserData.rawValue) baseline=\(baseline.tag) requested=51 observed=\(differentlyTaggedFields.tag)")
+        XCTAssertEqual(differentlyTaggedFields.tag, 51)
+        XCTAssertNotEqual(differentlyTaggedFields.tag, baseline.tag)
+        XCTAssertEqual(Fields(syntheticCopying: differentlyTaggedFields, tag: baseline.tag), baseline,
+                       "the actual negative control must differ only in its source tag")
+        XCTAssertFalse(differentlyTaggedFields.matchesPayload(baseline), "actual differing source tags must be rejected")
+
         // These setters are diagnostic only. An ignored write is not a matcher
         // failure; the pure replacements above cover each guard either way.
-        let diagnosticFields: [(String, CGEventField)] = [("sourcePID", .eventSourceUnixProcessID),
+        let diagnosticFields: [(String, CGEventField)] = [("sourceTag", .eventSourceUserData),
+            ("sourcePID", .eventSourceUnixProcessID),
             ("selector", CGEventField(rawValue: 55)!), ("hidType", CGEventField(rawValue: 110)!),
             ("axis", CGEventField(rawValue: 123)!)]
         for (name, field) in diagnosticFields {
@@ -201,8 +215,7 @@ final class SyntheticDockConsumerSmokeTests: XCTestCase {
         }
         // Only independently observed writable fields are API mutation fixtures.
         // Began (1) changes to valid changed (2), rather than an arbitrary phase.
-        let integerFields: [(String, CGEventField)] = [("sourceTag", .eventSourceUserData),
-            ("phase", CGEventField(rawValue: 132)!)]
+        let integerFields: [(String, CGEventField)] = [("phase", CGEventField(rawValue: 132)!)]
         for (name, field) in integerFields {
             let copy = try XCTUnwrap(packet.event.copy())
             let before = copy.getIntegerValueField(field)
