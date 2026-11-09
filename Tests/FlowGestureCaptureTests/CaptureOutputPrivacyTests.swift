@@ -33,7 +33,7 @@ final class CaptureOutputPrivacyTests: XCTestCase {
         XCTAssertEqual((attributes[.size] as? NSNumber)?.intValue, 0)
         XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
         let acl = try XCTUnwrap(acl_get_file(path, ACL_TYPE_EXTENDED))
-        defer { acl_free(acl) }
+        defer { acl_free(UnsafeMutableRawPointer(acl)) }
         var first: acl_entry_t?
         // Darwin (unlike Linux) returns zero when an ACL entry is obtained.
         XCTAssertEqual(acl_get_entry(acl, Int32(ACL_FIRST_ENTRY.rawValue), &first), 0)
