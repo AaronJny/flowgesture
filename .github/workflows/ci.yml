@@ -10,7 +10,11 @@ permissions:
   contents: read
 jobs:
   build:
-    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-15-intel, macos-26]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -53,14 +57,14 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: success()
         with:
-          name: FlowGesture-macos
+          name: FlowGesture-macos-${{ matrix.os }}
           path: build/FlowGesture-macos.dmg
           if-no-files-found: error
           retention-days: 7
       - name: Download uploaded install image
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: FlowGesture-macos
+          name: FlowGesture-macos-${{ matrix.os }}
           path: downloaded
       - name: Verify downloaded install image
         run: |
@@ -70,7 +74,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
-          name: FlowGesture-ui-review
+          name: FlowGesture-ui-review-${{ matrix.os }}
           path: build/ui-review/*.png
           if-no-files-found: ignore
           retention-days: 3
