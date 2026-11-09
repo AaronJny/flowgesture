@@ -22,6 +22,8 @@ final class QuartzReplayProbeTests: XCTestCase {
         XCTAssertEqual(probe.report.admittedHarmlessCounters, 3)
         XCTAssertEqual(probe.report.tapGenerations, 2)
         XCTAssertEqual(probe.report.invalidatedTaps, 6)
+        XCTAssertEqual(probe.report.transportEnvelopes.count, 2)
+        XCTAssertEqual(probe.report.transportEnvelopes.map(\.tapGeneration), [1, 2])
         print("PASS: live public Quartz fixture routing, exact source tags, admission, forwarding, consumption and teardown; NOT physical/native gesture suppression")
     }
 
@@ -79,6 +81,86 @@ final class QuartzReplayProbeTests: XCTestCase {
         XCTAssertFalse(QuartzReplayProbe.isHarmlessFixture(type: .scrollWheel, event: event))
         // Capturing diagnostics must not mutate an event or its source tag.
         XCTAssertEqual(QuartzReplayProbe.fixtureFields(event), after)
+    }
+
+    private func transportControl(flags: [UInt64], pids: [Int64] = [123, 123, 123]) throws -> QuartzReplayProbe.Delivery {
+        let event = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2,
+                                        wheel1: 0, wheel2: 0, wheel3: 0))
+        event.flags = []
+        let posted = QuartzReplayProbe.fixtureFields(event)
+        let stages: [QuartzReplayProbe.Stage] = [.head, .admission, .tail]
+        let observations = stages.enumerated().map { index, stage in
+            QuartzReplayProbe.Observation(ordinal: index + 1, stage: stage,
+                callbackType: CGEventType.scrollWheel.rawValue, eventType: CGEventType.scrollWheel.rawValue,
+                sourceTag: 7, sourcePID: pids[index], uptime: 0,
+                fields: .init(flagsRawValue: flags[index], publicMotionFields: posted.publicMotionFields))
+        }
+        return QuartzReplayProbe.Delivery(name: "control", sourceTag: 7, expectedStages: stages,
+            observations: observations, postedFields: posted, postedSourcePID: 123, calibrationControl: true)
+    }
+
+    func testTransportCalibrationRequiresCompleteConsistentPositiveControl() throws {
+        let flag = QuartzReplayProbe.observedPostedFlag
+        for value in [UInt64(0), flag] {
+            let envelope = try QuartzReplayProbe.establishEnvelope(transportControl(flags: [value, value, value]), generation: 1)
+            XCTAssertEqual(envelope.flagsRawValue, value)
+            XCTAssertEqual(envelope.controlTag, 7)
+            XCTAssertEqual(envelope.sourcePID, 123)
+        }
+        XCTAssertThrowsError(try QuartzReplayProbe.establishEnvelope(transportControl(flags: [flag, 0, flag]), generation: 1))
+        XCTAssertThrowsError(try QuartzReplayProbe.establishEnvelope(transportControl(flags: [flag, flag, flag], pids: [123, 124, 123]), generation: 1))
+        XCTAssertThrowsError(try QuartzReplayProbe.establishEnvelope(transportControl(flags: [flag | 1, flag | 1, flag | 1]), generation: 1))
+        var control = try transportControl(flags: [flag, flag, flag])
+        control.observations.removeLast()
+        XCTAssertThrowsError(try QuartzReplayProbe.establishEnvelope(control, generation: 1))
+        control = try transportControl(flags: [flag, flag, flag])
+        control.calibrationControl = false
+        XCTAssertThrowsError(try QuartzReplayProbe.establishEnvelope(control, generation: 1))
+        control = try transportControl(flags: [flag, flag, flag])
+        control.postedFields = .init(flagsRawValue: flag, publicMotionFields: try XCTUnwrap(control.postedFields).publicMotionFields)
+        XCTAssertThrowsError(try QuartzReplayProbe.establishEnvelope(control, generation: 1))
+        control = try transportControl(flags: [flag, flag, flag])
+        var fields = try XCTUnwrap(control.postedFields).publicMotionFields
+        fields["scrollPhase"] = 1
+        control.postedFields = .init(flagsRawValue: 0, publicMotionFields: fields)
+        XCTAssertThrowsError(try QuartzReplayProbe.establishEnvelope(control, generation: 1))
+    }
+
+    func testReceivedEnvelopeRejectsEveryAdditionalFlagAndCannotRelearn() throws {
+        let flag = QuartzReplayProbe.observedPostedFlag
+        let envelope = try QuartzReplayProbe.establishEnvelope(transportControl(flags: [flag, flag, flag]), generation: 1)
+        let event = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2,
+                                        wheel1: 0, wheel2: 0, wheel3: 0))
+        event.setIntegerValueField(.eventSourceUnixProcessID, value: 123)
+        event.flags = CGEventFlags(rawValue: flag)
+        func reasons(_ selected: QuartzReplayProbe.TransportEnvelope? = nil, control: Bool = false, pid: Int64? = 123) -> [String] {
+            QuartzReplayProbe.receivedFixtureRejections(type: .scrollWheel, event: event,
+                expectedPID: pid, envelope: selected, calibrationControl: control)
+        }
+        XCTAssertTrue(reasons(envelope).isEmpty)
+        XCTAssertFalse(QuartzReplayProbe.isHarmlessFixture(type: .scrollWheel, event: event), "posting remains strictly zero-flags")
+        XCTAssertFalse(reasons().isEmpty, "ordinary fixtures cannot calibrate")
+        XCTAssertTrue(reasons(control: true).isEmpty, "only the pass-only control may be observed before calibration")
+        XCTAssertFalse(reasons(envelope, control: true).isEmpty, "cannot recalibrate mid-generation")
+        XCTAssertFalse(reasons(envelope, pid: nil).isEmpty)
+        XCTAssertFalse(reasons(envelope, pid: 0).isEmpty)
+        XCTAssertFalse(reasons(envelope, pid: 124).isEmpty)
+        event.flags = []
+        XCTAssertFalse(reasons(envelope).isEmpty, "even removing bit 29 violates the frozen received envelope")
+        // Check the entire raw mask without depending on CGEventSetFlags to
+        // retain undocumented bits when constructing an unposted test object.
+        for bit in 0..<64 where bit != 29 {
+            XCTAssertFalse(QuartzReplayProbe.recognizedFixtureTransportFlags(flag | (UInt64(1) << bit)), "additional bit \(bit)")
+        }
+        for additional in [UInt64(1), CGEventFlags.maskCommand.rawValue, CGEventFlags.maskNonCoalesced.rawValue] {
+            event.flags = CGEventFlags(rawValue: flag | additional)
+            XCTAssertFalse(reasons(envelope).isEmpty)
+            XCTAssertFalse(reasons(control: true).isEmpty)
+        }
+        event.flags = CGEventFlags(rawValue: flag)
+        event.setDoubleValueField(.scrollWheelEventScrollPhase, value: 1)
+        XCTAssertFalse(reasons(envelope).isEmpty)
+        XCTAssertFalse(reasons(control: true).isEmpty)
     }
 
     private func delivery(_ stages: [QuartzReplayProbe.Stage], expected: [QuartzReplayProbe.Stage],

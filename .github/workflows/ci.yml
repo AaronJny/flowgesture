@@ -32,8 +32,12 @@ jobs:
         run: bash scripts/test-native-bridge.sh
       - name: Test
         run: swift test
+      - name: Test passive collector serialization without hardware
+        run: bash scripts/test-passive-capture.sh
       - name: Build app
         run: bash scripts/build-app.sh
+      - name: Package passive collector without live capture
+        run: bash scripts/package-passive-capture.sh
       - name: Launch smoke test
         run: bash scripts/smoke-test-app.sh
       - name: Render rule editor for visual review
@@ -85,6 +89,14 @@ jobs:
           path: build/ui-review/*.png
           if-no-files-found: ignore
           retention-days: 3
+      - name: Upload passive collector test artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: success()
+        with:
+          name: FlowGesture-passive-capture-${{ matrix.os }}
+          path: build/capture-tool/*
+          if-no-files-found: error
+          retention-days: 7
 
   quartz-replay:
     # Explicit isolated-branch opt-in. Ordinary branches/main never post fixtures.
@@ -103,6 +115,19 @@ jobs:
         env:
           FLOWGESTURE_RUN_QUARTZ_REPLAY: '1'
         run: bash scripts/test-quartz-replay.sh
+      - name: Observe passive capture capability without physical-input claims
+        if: always()
+        env:
+          FLOWGESTURE_RUN_CAPTURE_CAPABILITY: '1'
+        run: bash scripts/probe-passive-capture-capability.sh
+      - name: Upload passive capability evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: FlowGesture-capture-capability-${{ matrix.os }}
+          path: build/capture-capability/report.json
+          if-no-files-found: warn
+          retention-days: 7
       - name: Upload bounded synthetic replay evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()

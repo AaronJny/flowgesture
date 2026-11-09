@@ -31,9 +31,17 @@ final class QuartzReplayProbe {
         let expectedStages: [Stage]
         var observations: [Observation] = []
         var postedFields: FixtureFields?
+        var postedSourcePID: Int64?
+        var calibrationControl = false
+    }
+    struct TransportEnvelope: Codable {
+        let tapGeneration: Int
+        let controlTag: Int64
+        let flagsRawValue: UInt64
+        let sourcePID: Int64
     }
     struct Report: Codable {
-        let schemaVersion = 2
+        let schemaVersion = 3
         let evidenceScope = "synthetic-public-scroll-transport-only"
         let privateGesturePacketsPosted = false
         let provesPhysicalGestureSuppression = false
@@ -53,6 +61,7 @@ final class QuartzReplayProbe {
         var admittedHarmlessCounters = 0
         var tapGenerations = 0
         var invalidatedTaps = 0
+        var transportEnvelopes: [TransportEnvelope] = []
     }
     struct Failure: Error, CustomStringConvertible {
         let description: String
@@ -106,6 +115,7 @@ final class QuartzReplayProbe {
     private var taps: [Tap] = []
     private var fixtures: [Int64: Int] = [:]
     private var admissions: [Int64: Admission] = [:]
+    private var transportEnvelope: TransportEnvelope?
     private var ordinal = 0
     private var deadline = 0.0
     private let source: CGEventSource
@@ -143,7 +153,8 @@ final class QuartzReplayProbe {
                 throw Failure("existing Input Monitoring and event-posting access are required; no access was requested")
             }
             try install()
-            try send("positive-forward-control")
+            try send("positive-forward-control", calibrationControl: true)
+            try calibrateTransport()
             let first = try Admission()
             try send("one-use-admission-consumes", admission: first, consumed: true)
             try send("duplicate-ticket-forwards", admission: first)
@@ -171,7 +182,8 @@ final class QuartzReplayProbe {
             stop()
             try require(report.invalidatedTaps == 3, "first generation did not completely invalidate")
             try install()
-            try send("reinstalled-forward-control")
+            try send("reinstalled-forward-control", calibrationControl: true)
+            try calibrateTransport()
             let replacement = try Admission()
             try send("reinstalled-admission-consumes", admission: replacement, consumed: true)
             try send("reinstalled-forward-sentinel")
@@ -235,6 +247,7 @@ final class QuartzReplayProbe {
     }
 
     private func stop() {
+        transportEnvelope = nil
         // Never re-enable a tap after an OS timeout. No cancellation/repair event is posted.
         for tap in taps {
             CGEvent.tapEnable(tap: tap.port, enable: false)
@@ -265,9 +278,12 @@ final class QuartzReplayProbe {
             ordinal: ordinal, stage: stage, callbackType: type.rawValue, eventType: event.type.rawValue,
             sourceTag: tag, sourcePID: event.getIntegerValueField(.eventSourceUnixProcessID),
             uptime: ProcessInfo.processInfo.systemUptime, fields: Self.fixtureFields(event)))
-        guard Self.isHarmlessFixture(type: type, event: event) else {
-            let reasons = Self.fixtureRejections(type: type, event: event).joined(separator: ", ")
-            report.failures.append("\(stage.rawValue) tagged fixture changed: \(reasons)")
+        let delivery = report.deliveries[index]
+        let reasons = Self.receivedFixtureRejections(type: type, event: event,
+            expectedPID: delivery.postedSourcePID, envelope: transportEnvelope,
+            calibrationControl: delivery.calibrationControl)
+        guard reasons.isEmpty else {
+            report.failures.append("\(stage.rawValue) tagged fixture changed: \(reasons.joined(separator: ", "))")
             return Unmanaged.passUnretained(event)
         }
         // Use the ACTUAL callback class, not an expected private selector. Public
@@ -276,7 +292,10 @@ final class QuartzReplayProbe {
             report.failures.append("public callback was incorrectly decoded as a native gesture")
             return Unmanaged.passUnretained(event)
         }
-        if stage == .admission, let admission = admissions[tag] {
+        // Positive controls never admit actions. A prior complete pass-through
+        // control must have frozen this generation's exact received envelope.
+        if stage == .admission, !delivery.calibrationControl, report.failures.isEmpty,
+           transportEnvelope != nil, let admission = admissions[tag] {
             do {
                 if try admission.take() {
                     report.admittedHarmlessCounters += 1
@@ -310,13 +329,13 @@ final class QuartzReplayProbe {
                       }))
     }
 
-    /// Diagnostics deliberately use exactly the same strict checks as admission.
-    /// No flag normalization or nonzero phase/delta is accepted by this revision.
-    static func fixtureRejections(type: CGEventType, event: CGEvent) -> [String] {
+    /// Post-side validation stays strictly zero-flags. Received envelopes may
+    /// match only the separately verified, test-only positive control below.
+    static func fixtureRejections(type: CGEventType, event: CGEvent, expectedFlags: UInt64 = 0) -> [String] {
         var reasons: [String] = []
         if type != .scrollWheel { reasons.append("callbackType=\(type.rawValue)") }
         if event.type != .scrollWheel { reasons.append("eventType=\(event.type.rawValue)") }
-        if !event.flags.isEmpty { reasons.append("flags=0x\(String(event.flags.rawValue, radix: 16))") }
+        if event.flags.rawValue != expectedFlags { reasons.append("flags=0x\(String(event.flags.rawValue, radix: 16))") }
         for (name, field) in motionFields {
             let value = event.getDoubleValueField(field)
             if value != 0 { reasons.append("\(name)=\(value)") }
@@ -328,8 +347,80 @@ final class QuartzReplayProbe {
         fixtureRejections(type: type, event: event).isEmpty
     }
 
-    private func send(_ name: String, admission: Admission? = nil, consumed: Bool = false, bypass: Bool = false) throws {
+    // Apple does not document a meaning for bit 29 in CGEventFlags/IOLLEvent.h.
+    // Hammerspoon reports it on posted synthetic events but explicitly lacks an
+    // authoritative definition. Our three hosted runners observed this exact bit:
+    // https://github.com/Hammerspoon/hammerspoon/blob/23e387e2805a9890066366e0ac96c71b27f0cfd5/extensions/eventtap/libeventtap_event.m
+    // This is an opaque FIXTURE TRANSPORT value, never a physical-origin test.
+    static let observedPostedFlag: UInt64 = 0x20000000
+    static func recognizedFixtureTransportFlags(_ flags: UInt64) -> Bool {
+        flags == 0 || flags == observedPostedFlag
+    }
+
+    static func receivedFixtureRejections(type: CGEventType, event: CGEvent, expectedPID: Int64?,
+                                          envelope: TransportEnvelope?, calibrationControl: Bool) -> [String] {
+        let flags = event.flags.rawValue
+        guard recognizedFixtureTransportFlags(flags) else {
+            return ["unexpected transport flags=0x\(String(flags, radix: 16))"]
+        }
+        guard let expectedPID, expectedPID > 0,
+              event.getIntegerValueField(.eventSourceUnixProcessID) == expectedPID else {
+            return ["fixture source PID changed or was not established before posting"]
+        }
+        if let envelope {
+            guard !calibrationControl, envelope.sourcePID == expectedPID else {
+                return ["transport control or PID conflicts with frozen envelope"]
+            }
+            return fixtureRejections(type: type, event: event, expectedFlags: envelope.flagsRawValue)
+        }
+        guard calibrationControl else { return ["no positively verified transport envelope"] }
+        // The only uncalibrated route is a non-consuming forward control. Every
+        // observation still needs zero motion/phases and one of two exact flags.
+        return fixtureRejections(type: type, event: event, expectedFlags: flags)
+    }
+
+    static func establishEnvelope(_ delivery: Delivery, generation: Int) throws -> TransportEnvelope {
+        guard delivery.calibrationControl, delivery.expectedStages == [.head, .admission, .tail],
+              validationErrors([delivery]).isEmpty,
+              let posted = delivery.postedFields, posted.flagsRawValue == 0,
+              zeroMotionSnapshot(posted), let pid = delivery.postedSourcePID, pid > 0,
+              let first = delivery.observations.first else {
+            throw Failure("positive transport control lacks complete strictly zero-motion post/receipt evidence")
+        }
+        let flags = first.fields.flagsRawValue
+        guard recognizedFixtureTransportFlags(flags) else {
+            throw Failure("positive transport control has unknown flags")
+        }
+        guard delivery.observations.allSatisfy({
+            $0.sourcePID == pid && $0.fields.flagsRawValue == flags && zeroMotionSnapshot($0.fields)
+        }) else { throw Failure("positive transport control changed PID, flags, motion or phases between taps") }
+        return TransportEnvelope(tapGeneration: generation, controlTag: delivery.sourceTag,
+                                 flagsRawValue: flags, sourcePID: pid)
+    }
+
+    private static func zeroMotionSnapshot(_ fields: FixtureFields) -> Bool {
+        Set(fields.publicMotionFields.keys) == Set(motionFields.map(\.name)) &&
+            fields.publicMotionFields.values.allSatisfy { $0 == 0 }
+    }
+
+    private func calibrateTransport() throws {
+        // Establish only AFTER the complete, non-consuming control reaches tail.
+        // Never learn a broader flag mask or silently recalibrate mid-generation.
+        try drainAndValidate()
+        guard transportEnvelope == nil, let control = report.deliveries.last else {
+            throw Failure("transport calibration attempted without a fresh positive control")
+        }
+        let envelope = try Self.establishEnvelope(control, generation: report.tapGenerations)
+        transportEnvelope = envelope
+        report.transportEnvelopes.append(envelope)
+    }
+
+    private func send(_ name: String, admission: Admission? = nil, consumed: Bool = false, bypass: Bool = false,
+                      calibrationControl: Bool = false) throws {
         try require(report.failures.isEmpty, "tap callback already failed: \(report.failures.joined(separator: "; "))")
+        try require(!calibrationControl || (admission == nil && !consumed && !bypass && transportEnvelope == nil),
+                    "calibration must be a fresh pass-only control without action admission")
+        try require(calibrationControl || transportEnvelope != nil, "cannot post test cases before transport calibration")
         guard let event = CGEvent(scrollWheelEvent2Source: source, units: .pixel, wheelCount: 2,
                                   wheel1: 0, wheel2: 0, wheel3: 0) else {
             throw Failure("could not create zero-motion public scroll fixture")
@@ -339,10 +430,13 @@ final class QuartzReplayProbe {
         repeat { tag = Int64.random(in: 1...Int64.max) } while fixtures[tag] != nil
         event.setIntegerValueField(.eventSourceUserData, value: tag)
         try require(Self.isHarmlessFixture(type: .scrollWheel, event: event), "fixture was not harmless before posting")
+        let postedPID = event.getIntegerValueField(.eventSourceUnixProcessID)
+        try require(postedPID == Int64(getpid()), "fixture source PID does not match the posting process")
         let index = report.deliveries.count
         let stages: [Stage] = bypass ? [.head, .tail] : consumed ? [.head, .admission] : [.head, .admission, .tail]
         report.deliveries.append(Delivery(name: name, sourceTag: tag, expectedStages: stages,
-                                          postedFields: Self.fixtureFields(event)))
+                                          postedFields: Self.fixtureFields(event), postedSourcePID: postedPID,
+                                          calibrationControl: calibrationControl))
         fixtures[tag] = index
         admissions[tag] = admission
         event.post(tap: .cgSessionEventTap)
